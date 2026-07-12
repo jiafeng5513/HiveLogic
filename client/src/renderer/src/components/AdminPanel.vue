@@ -323,6 +323,9 @@
         </div>
         <div v-else class="section-empty">暂无账号（点击「创建账号」或「刷新」）</div>
       </div>
+
+      <!-- 9. 主动消息中心 -->
+      <ProactiveMessageCenter />
     </template>
 
     <!-- 创建账号对话框 -->
@@ -456,6 +459,7 @@
  */
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { getApiBase } from '../service/serverConfig'
+import ProactiveMessageCenter from './ProactiveMessageCenter.vue'
 
 // ==================== 常量 ====================
 
