@@ -52,13 +52,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Valid orchestrator modes (ordered by cost/depth)
-VALID_MODES = ("quick", "deep")
+VALID_MODES = ("quick", "deep", "autonomous")
 
 # Backward-compatible mapping: old mode names → new canonical modes
 MODE_MAPPING: Dict[str, str] = {
     # Canonical modes
     "quick": "quick",
     "deep": "deep",
+    "autonomous": "autonomous",
     # Legacy modes (deprecated but still accepted)
     "chat": "quick",       # chat removed, maps to quick
     "standard": "quick",   # standard → quick (always includes Intel now)
@@ -674,6 +675,7 @@ class AgentOrchestrator:
         from src.agent.agents.intel_agent import IntelAgent
         from src.agent.agents.decision_agent import DecisionAgent
         from src.agent.agents.risk_agent import RiskAgent
+        from src.agent.agents.autonomous_agent import AutonomousPlannerAgent
 
         self._skill_agent_names = set()
 
@@ -683,6 +685,13 @@ class AgentOrchestrator:
             skill_instructions=self.skill_instructions,
             technical_skill_policy=self.technical_skill_policy,
         )
+
+        if self.mode == "autonomous":
+            # Autonomous: single agent that self-plans its investigation path.
+            # It has full tool access and uses the REASONING tier model.
+            # No debate / risk-debate / skill agents — the planner does everything.
+            planner = self._prepare_agent(AutonomousPlannerAgent(**common_kwargs))
+            return [planner]
 
         technical = self._prepare_agent(TechnicalAgent(**common_kwargs))
         intel = self._prepare_agent(IntelAgent(**common_kwargs))
@@ -937,10 +946,11 @@ class AgentOrchestrator:
         if not ctx.stock_code:
             return
 
-        # Find decision opinion
+        # Find decision opinion — in autonomous mode it comes from
+        # autonomous_planner; in quick/deep it comes from decision agent.
         decision_op = None
         for op in reversed(ctx.opinions):
-            if op.agent_name == "decision":
+            if op.agent_name in ("decision", "autonomous_planner"):
                 decision_op = op
                 break
         if not decision_op:
@@ -964,6 +974,8 @@ class AgentOrchestrator:
                 research_plan=ctx.get_data("research_plan"),
                 risk_verdict=ctx.get_data("risk_debate_verdict"),
                 debate_summary=ctx.get_data("debate_history"),
+                autonomous_plan=ctx.get_data("autonomous_plan"),
+                autonomous_step_reasoning=ctx.get_data("autonomous_step_reasoning"),
             )
         except Exception as exc:
             logger.warning("[Orchestrator] decision recording failed: %s", exc)
