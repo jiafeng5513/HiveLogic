@@ -561,6 +561,21 @@ class Config:
     agent_event_monitor_interval_minutes: int = 5  # Polling interval for event monitor background checks
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
 
+    # === Phase E: 主动陪伴 (Proactive) ===
+    agent_anomaly_monitor_enabled: bool = False  # 启用异动监控引擎（自选+持仓自动扫描）
+    agent_anomaly_scan_interval_minutes: int = 5  # 异动扫描轮询间隔（分钟）
+    agent_anomaly_lookback_days: int = 20  # 价格/成交量回看天数
+    agent_anomaly_volume_multiplier: float = 2.5  # 放量异动倍数阈值
+    agent_anomaly_intraday_pct: float = 5.0  # 日内涨跌幅阈值（%）
+    agent_anomaly_news_lookback_hours: int = 24  # 新闻利空回看小时数
+    agent_anomaly_cooldown_seconds: int = 1800  # 同标的同类型冷却窗口（秒）
+    agent_anomaly_ma_period: int = 20  # 技术破位均线周期
+    agent_proactive_analysis_enabled: bool = False  # 异动事件触发主动 AI 分析
+    agent_proactive_analysis_max_steps: int = 5  # 主动分析步数上限（轻量版）
+    agent_opportunity_scan_enabled: bool = False  # 盘后机会扫描
+    agent_opportunity_scan_time: str = "18:30"  # 机会扫描执行时间 HH:MM
+    agent_opportunity_scan_top_n: int = 10  # 机会扫描深度分析 top N
+
     # === Phase B: 代码执行沙箱 ===
     sandbox_enabled: bool = False  # 是否启用 AI 代码执行沙箱（需 Docker 环境）
     sandbox_container_name: str = "hivelogic-sandbox"  # 沙箱 sidecar 容器名
@@ -1291,6 +1306,65 @@ class Config:
                 minimum=1,
             ),
             agent_event_alert_rules_json=os.getenv('AGENT_EVENT_ALERT_RULES_JSON', ''),
+            # === Phase E: 主动陪伴 (Proactive) ===
+            agent_anomaly_monitor_enabled=os.getenv('AGENT_ANOMALY_MONITOR_ENABLED', 'false').lower() == 'true',
+            agent_anomaly_scan_interval_minutes=parse_env_int(
+                os.getenv('AGENT_ANOMALY_SCAN_INTERVAL_MINUTES'),
+                5,
+                field_name='AGENT_ANOMALY_SCAN_INTERVAL_MINUTES',
+                minimum=1,
+            ),
+            agent_anomaly_lookback_days=parse_env_int(
+                os.getenv('AGENT_ANOMALY_LOOKBACK_DAYS'),
+                20,
+                field_name='AGENT_ANOMALY_LOOKBACK_DAYS',
+                minimum=5,
+            ),
+            agent_anomaly_volume_multiplier=parse_env_float(
+                os.getenv('AGENT_ANOMALY_VOLUME_MULTIPLIER'),
+                2.5,
+                field_name='AGENT_ANOMALY_VOLUME_MULTIPLIER',
+                minimum=1.5,
+            ),
+            agent_anomaly_intraday_pct=parse_env_float(
+                os.getenv('AGENT_ANOMALY_INTRADAY_PCT'),
+                5.0,
+                field_name='AGENT_ANOMALY_INTRADAY_PCT',
+                minimum=1.0,
+            ),
+            agent_anomaly_news_lookback_hours=parse_env_int(
+                os.getenv('AGENT_ANOMALY_NEWS_LOOKBACK_HOURS'),
+                24,
+                field_name='AGENT_ANOMALY_NEWS_LOOKBACK_HOURS',
+                minimum=1,
+            ),
+            agent_anomaly_cooldown_seconds=parse_env_int(
+                os.getenv('AGENT_ANOMALY_COOLDOWN_SECONDS'),
+                1800,
+                field_name='AGENT_ANOMALY_COOLDOWN_SECONDS',
+                minimum=60,
+            ),
+            agent_anomaly_ma_period=parse_env_int(
+                os.getenv('AGENT_ANOMALY_MA_PERIOD'),
+                20,
+                field_name='AGENT_ANOMALY_MA_PERIOD',
+                minimum=5,
+            ),
+            agent_proactive_analysis_enabled=os.getenv('AGENT_PROACTIVE_ANALYSIS_ENABLED', 'false').lower() == 'true',
+            agent_proactive_analysis_max_steps=parse_env_int(
+                os.getenv('AGENT_PROACTIVE_ANALYSIS_MAX_STEPS'),
+                5,
+                field_name='AGENT_PROACTIVE_ANALYSIS_MAX_STEPS',
+                minimum=2,
+            ),
+            agent_opportunity_scan_enabled=os.getenv('AGENT_OPPORTUNITY_SCAN_ENABLED', 'false').lower() == 'true',
+            agent_opportunity_scan_time=os.getenv('AGENT_OPPORTUNITY_SCAN_TIME', '18:30'),
+            agent_opportunity_scan_top_n=parse_env_int(
+                os.getenv('AGENT_OPPORTUNITY_SCAN_TOP_N'),
+                10,
+                field_name='AGENT_OPPORTUNITY_SCAN_TOP_N',
+                minimum=1,
+            ),
             # === Phase B: 代码执行沙箱 ===
             sandbox_enabled=os.getenv('SANDBOX_ENABLED', 'false').lower() == 'true',
             sandbox_container_name=os.getenv('SANDBOX_CONTAINER_NAME', 'hivelogic-sandbox'),
