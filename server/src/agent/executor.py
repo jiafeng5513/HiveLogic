@@ -721,14 +721,24 @@ class AgentExecutor:
         # Build tool declarations in OpenAI format (litellm handles all providers)
         tool_decls = self.tool_registry.to_openai_tools()
 
+        # Phase D.4: account_id 从 context 透传到 conversation session（跨 session 归属）
+        account_id = (context or {}).get("account_id")
+
         # Get conversation history
-        session = conversation_manager.get_or_create(session_id)
+        session = conversation_manager.get_or_create(session_id, account_id=account_id)
         history = session.get_history()
 
         # Initialize conversation
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
+
+        # Phase D.4: 注入跨 session 长记忆（用户长期笔记）
+        if account_id is not None:
+            notes_block = self._build_user_notes_block(account_id)
+            if notes_block:
+                messages.append({"role": "system", "content": notes_block})
+
         messages.extend(history)
 
         # Inject previous analysis context if provided (data reuse from report follow-up)
@@ -758,18 +768,47 @@ class AgentExecutor:
         messages.append({"role": "user", "content": message})
 
         # Persist the user turn immediately so the session appears in history during processing
-        conversation_manager.add_message(session_id, "user", message)
+        conversation_manager.add_message(session_id, "user", message, account_id=account_id)
 
         result = self._run_loop(messages, tool_decls, parse_dashboard=False, progress_callback=progress_callback)
 
         # Persist assistant reply (or error note) for context continuity
         if result.success:
-            conversation_manager.add_message(session_id, "assistant", result.content)
+            conversation_manager.add_message(session_id, "assistant", result.content, account_id=account_id)
         else:
             error_note = f"[分析失败] {result.error or '未知错误'}"
-            conversation_manager.add_message(session_id, "assistant", error_note)
+            conversation_manager.add_message(session_id, "assistant", error_note, account_id=account_id)
 
         return result
+
+    def _build_user_notes_block(self, account_id: int) -> str:
+        """Phase D.4: 构造用户跨 session 长期笔记 system 消息块。
+
+        返回空字符串表示无激活笔记。
+        """
+        try:
+            from src.storage import get_db
+
+            notes = get_db().get_active_user_notes(account_id)
+            if not notes:
+                return ""
+
+            lines = ["## 用户长期偏好（跨会话记忆）"]
+            for note in notes:
+                cat = note.get("category", "preference")
+                content = (note.get("content") or "").strip()
+                if not content:
+                    continue
+                lines.append(f"- [{cat}] {content}")
+            lines.append(
+                "以上是用户在历史会话中表达过的长期偏好与约束，请在本次分析中遵守，"
+                "并在建议与这些偏好冲突时主动提示用户。"
+            )
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.debug("[Executor] 用户笔记注入跳过: %s", exc)
+            return ""
+
 
     def _run_loop(self, messages: List[Dict[str, Any]], tool_decls: List[Dict[str, Any]], parse_dashboard: bool, progress_callback: Optional[Callable] = None) -> AgentResult:
         """Delegate to the shared runner and adapt the result.

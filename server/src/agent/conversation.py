@@ -22,11 +22,19 @@ class ConversationSession:
     context: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
+    # Phase D.4: account_id 用于跨 session 消息归属与长记忆注入
+    account_id: Optional[int] = None
 
-    def add_message(self, role: str, content: str):
+    def add_message(self, role: str, content: str, account_id: Optional[int] = None):
         """Add a message to the session history."""
-        get_db().save_conversation_message(self.session_id, role, content)
+        effective_account = account_id if account_id is not None else self.account_id
+        get_db().save_conversation_message(
+            self.session_id, role, content, account_id=effective_account
+        )
         self.last_active = datetime.now()
+        # 一旦确定 account_id，缓存到 session 上以便后续消息自动带上
+        if effective_account is not None and self.account_id is None:
+            self.account_id = effective_account
 
     def update_context(self, key: str, value: Any):
         """Update session context."""
@@ -46,24 +54,35 @@ class ConversationManager:
         self.ttl = timedelta(minutes=ttl_minutes)
         self._lock = threading.RLock()
 
-    def get_or_create(self, session_id: str) -> ConversationSession:
+    def get_or_create(self, session_id: str, account_id: Optional[int] = None) -> ConversationSession:
         """Get an existing session or create a new one."""
         with self._lock:
             self._cleanup_expired()
 
             if session_id not in self._sessions:
-                self._sessions[session_id] = ConversationSession(session_id=session_id)
+                self._sessions[session_id] = ConversationSession(
+                    session_id=session_id, account_id=account_id
+                )
                 logger.info(f"Created new conversation session: {session_id}")
             else:
                 # Update last active time
                 self._sessions[session_id].last_active = datetime.now()
+                # 若 session 已存在但新调用携带 account_id，补齐
+                if account_id is not None and self._sessions[session_id].account_id is None:
+                    self._sessions[session_id].account_id = account_id
 
             return self._sessions[session_id]
 
-    def add_message(self, session_id: str, role: str, content: str):
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        account_id: Optional[int] = None,
+    ):
         """Add a message to a session."""
-        session = self.get_or_create(session_id)
-        session.add_message(role, content)
+        session = self.get_or_create(session_id, account_id=account_id)
+        session.add_message(role, content, account_id=account_id)
 
     def get_history(self, session_id: str) -> List[Dict[str, Any]]:
         """Get message history for a session."""
