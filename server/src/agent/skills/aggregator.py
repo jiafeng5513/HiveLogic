@@ -96,9 +96,21 @@ class SkillAggregator:
             f"Skill consensus from {len(skill_opinions)} skills "
             f"({', '.join(skill_names)}): weighted score {weighted_score:.2f}/5.0"
         ]
+
+        # Phase D: 查询各 skill 历史胜率，高胜率标注"历史验证有效"
+        skill_win_rates = self._fetch_skill_win_rates(skill_ids) if memory.enabled else {}
+
         for op, weight in zip(skill_opinions, weights):
             name = extract_skill_id(op.agent_name) or op.agent_name
-            reasoning_parts.append(f"  - {name}: {op.signal} ({op.confidence:.0%}) weight={weight:.2f}")
+            line = f"  - {name}: {op.signal} ({op.confidence:.0%}) weight={weight:.2f}"
+            wr_entry = skill_win_rates.get(name)
+            if wr_entry and wr_entry.get("total", 0) >= _MIN_BACKTEST_SAMPLES:
+                wr = wr_entry.get("win_rate", 0.5)
+                if wr >= 0.55:
+                    line += f" [历史验证有效: 胜率{wr:.0%} ({wr_entry['total']}次)]"
+                elif wr < 0.40:
+                    line += f" [历史胜率偏低: {wr:.0%}]"
+            reasoning_parts.append(line)
 
         return AgentOpinion(
             agent_name=SKILL_CONSENSUS_AGENT_NAME,
@@ -155,6 +167,33 @@ class SkillAggregator:
         except Exception:
             logger.debug("Failed to get backtest autoweight config, defaulting to True", exc_info=True)
             return True
+
+    @staticmethod
+    def _fetch_skill_win_rates(skill_ids: List[str]) -> Dict[str, Dict[str, float]]:
+        """Phase D: 批量查询 skill 历史胜率（从 DecisionLog）。
+
+        Returns:
+            {skill_id: {"win_rate": float, "total": int}}
+        """
+        result: Dict[str, Dict[str, float]] = {}
+        try:
+            from src.agent.reflection.service import ReflectionService
+            from src.agent.reflection.repository import ReflectionRepository
+            from src.storage import DatabaseManager
+
+            db = DatabaseManager.get_instance()
+            repo = ReflectionRepository(db.session_scope)
+            service = ReflectionService(repo)
+
+            for sid in skill_ids:
+                stats = service.get_skill_stats(sid, lookback_days=90)
+                result[sid] = {
+                    "win_rate": stats.get("win_rate", 0.5),
+                    "total": stats.get("total_calls", 0),
+                }
+        except Exception as exc:
+            logger.debug("[SkillAggregator] failed to fetch skill win rates: %s", exc)
+        return result
 
 
 StrategyAggregator = SkillAggregator

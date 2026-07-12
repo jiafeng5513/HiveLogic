@@ -207,10 +207,39 @@ class AgentMemory:
         """Get performance metrics for a skill.
 
         Used by :class:`SkillAggregator` for weight computation.
+
+        Phase D: 优先从 DecisionLog（已验证决策）读取胜率，替代原先的
+        BacktestService stub。若 ``agent_skill_learning_enabled=False`` 或
+        无足够样本，返回中性结果。
         """
         if not self.enabled:
             return {"available": False}
 
+        # Phase D: 从 DecisionLog 读取已验证决策的 skill 胜率
+        try:
+            from src.agent.reflection.service import ReflectionService
+            from src.agent.reflection.repository import ReflectionRepository
+            from src.storage import DatabaseManager
+
+            db = DatabaseManager.get_instance()
+            repo = ReflectionRepository(db.session_scope)
+            service = ReflectionService(repo)
+            stats = service.get_skill_stats(skill_id, lookback_days=90)
+
+            total = stats.get("total_calls", 0)
+            if total > 0:
+                return {
+                    "available": True,
+                    "win_rate": stats.get("win_rate", 0.5),
+                    "total_evaluations": total,
+                    "avg_return": stats.get("avg_return_pct", 0.0),
+                    "direction_accuracy": stats.get("direction_accuracy", 0.5),
+                    "sufficient_samples": total >= self.min_samples,
+                }
+        except Exception as exc:
+            logger.debug("[AgentMemory] DecisionLog skill stats failed for %s: %s", skill_id, exc)
+
+        # Fallback: 旧的 BacktestService 路径（保留兼容，尽管当前为 stub）
         try:
             from src.services.backtest_service import BacktestService
             service = BacktestService()
@@ -224,9 +253,9 @@ class AgentMemory:
                     "direction_accuracy": summary.get("direction_accuracy", 0.5),
                     "sufficient_samples": summary.get("total_evaluations", 0) >= self.min_samples,
                 }
-            return {"available": False}
         except Exception:
-            return {"available": False}
+            pass
+        return {"available": False}
 
     def get_strategy_performance(self, strategy_id: str) -> Dict[str, Any]:
         """Compatibility wrapper for legacy strategy-based callers."""
@@ -287,7 +316,33 @@ class AgentMemory:
         stock_code: Optional[str],
         skill_id: Optional[str],
     ) -> Dict[str, Any]:
-        """Aggregate accuracy statistics from backtest history."""
+        """Aggregate accuracy statistics from verified DecisionLog records.
+
+        Phase D: 优先从 DecisionLog 读取（真实决策结果），BacktestService 作为 fallback。
+        """
+        # Phase D: 从 DecisionLog 读取已验证决策统计
+        try:
+            from src.agent.reflection.service import ReflectionService
+            from src.agent.reflection.repository import ReflectionRepository
+            from src.storage import DatabaseManager
+
+            db = DatabaseManager.get_instance()
+            repo = ReflectionRepository(db.session_scope)
+            service = ReflectionService(repo)
+
+            if skill_id:
+                stats = service.get_skill_stats(skill_id, lookback_days=90)
+                if stats.get("total_calls", 0) > 0:
+                    return {
+                        "total": stats.get("total_calls", 0),
+                        "accuracy": stats.get("win_rate", 0.5),
+                        "direction_accuracy": stats.get("direction_accuracy", 0.5),
+                        "avg_confidence": 0.6,
+                    }
+        except Exception as exc:
+            logger.debug("[AgentMemory] DecisionLog accuracy stats failed: %s", exc)
+
+        # Fallback: 旧 BacktestService 路径
         try:
             from src.services.backtest_service import BacktestService
             service = BacktestService()
