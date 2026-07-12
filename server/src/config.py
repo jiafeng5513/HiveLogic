@@ -537,6 +537,7 @@ class Config:
     agent_litellm_model: str = ""  # Optional Agent-only primary model; empty inherits LITELLM_MODEL
     agent_deep_think_model: str = ""  # 深度推理模型 (decision/risk agent); empty falls back to agent_litellm_model
     agent_quick_think_model: str = ""  # 快速模型 (technical/intel agent); empty falls back to agent_litellm_model
+    agent_reasoning_model: str = ""  # 推理模型 (autonomous planner 规划步骤); empty falls back to agent_deep_think_model
     agent_model_assignment: str = ""  # JSON dict override: {"agent_name": "deep_think|quick_think"}
     agent_mode: bool = False
     _agent_mode_explicit: bool = False  # True when AGENT_MODE was explicitly set in env
@@ -557,6 +558,13 @@ class Config:
     agent_event_monitor_enabled: bool = False  # Enable periodic event-driven alert checks in schedule mode
     agent_event_monitor_interval_minutes: int = 5  # Polling interval for event monitor background checks
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
+
+    # === Phase B: 代码执行沙箱 ===
+    sandbox_enabled: bool = False  # 是否启用 AI 代码执行沙箱（需 Docker 环境）
+    sandbox_container_name: str = "hivelogic-sandbox"  # 沙箱 sidecar 容器名
+    sandbox_timeout_seconds: int = 30  # 单次代码执行超时
+    sandbox_max_output_bytes: int = 10240  # stdout/stderr 各自最大输出字节数（超出截断）
+    sandbox_daily_quota: int = 50  # 每日代码执行配额（0 = 不限制）
 
     # === Phase 3: 辩论 + 风险讨论 + 反思 ===
     agent_debate_enabled: bool = True  # 启用 Bull/Bear 辩论 (仅 full/specialist 模式生效)
@@ -794,7 +802,7 @@ class Config:
 
     # --- Post-init validation ---------------------------------------------------
     _VALID_AGENT_ARCH = {"single", "multi"}
-    _VALID_ORCHESTRATOR_MODES = {"quick", "deep", "standard", "full", "specialist"}
+    _VALID_ORCHESTRATOR_MODES = {"quick", "deep", "autonomous", "standard", "full", "specialist"}
     _VALID_SKILL_ROUTING = {"auto", "manual"}
     _WEBUI_RUNTIME_ENV_FILE_PRIORITY_KEYS = frozenset(
         {
@@ -1058,6 +1066,7 @@ class Config:
 
         agent_deep_think_model = os.getenv('AGENT_DEEP_THINK_MODEL', '')
         agent_quick_think_model = os.getenv('AGENT_QUICK_THINK_MODEL', '')
+        agent_reasoning_model = os.getenv('AGENT_REASONING_MODEL', '')
         agent_model_assignment = os.getenv('AGENT_MODEL_ASSIGNMENT', '')
 
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
@@ -1225,6 +1234,7 @@ class Config:
             agent_litellm_model=agent_litellm_model,
             agent_deep_think_model=agent_deep_think_model,
             agent_quick_think_model=agent_quick_think_model,
+            agent_reasoning_model=agent_reasoning_model,
             agent_model_assignment=agent_model_assignment,
             agent_mode=os.getenv('AGENT_MODE', 'false').lower() == 'true',
             _agent_mode_explicit=os.getenv('AGENT_MODE') is not None,
@@ -1276,6 +1286,28 @@ class Config:
                 minimum=1,
             ),
             agent_event_alert_rules_json=os.getenv('AGENT_EVENT_ALERT_RULES_JSON', ''),
+            # === Phase B: 代码执行沙箱 ===
+            sandbox_enabled=os.getenv('SANDBOX_ENABLED', 'false').lower() == 'true',
+            sandbox_container_name=os.getenv('SANDBOX_CONTAINER_NAME', 'hivelogic-sandbox'),
+            sandbox_timeout_seconds=parse_env_int(
+                os.getenv('SANDBOX_TIMEOUT_SECONDS'),
+                30,
+                field_name='SANDBOX_TIMEOUT_SECONDS',
+                minimum=5,
+                maximum=120,
+            ),
+            sandbox_max_output_bytes=parse_env_int(
+                os.getenv('SANDBOX_MAX_OUTPUT_BYTES'),
+                10240,
+                field_name='SANDBOX_MAX_OUTPUT_BYTES',
+                minimum=1024,
+            ),
+            sandbox_daily_quota=parse_env_int(
+                os.getenv('SANDBOX_DAILY_QUOTA'),
+                50,
+                field_name='SANDBOX_DAILY_QUOTA',
+                minimum=0,
+            ),
             agent_debate_enabled=os.getenv('AGENT_DEBATE_ENABLED', 'true').lower() == 'true',
             agent_debate_rounds=parse_env_int(
                 os.getenv('AGENT_DEBATE_ROUNDS'),

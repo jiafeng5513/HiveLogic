@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-模型层级分配 (Dual LLM Tier Dispatch)
+模型层级分配 (Tiered LLM Dispatch)
 ===================================
 
 定义 Agent → 模型层级的映射关系。
 
-两个层级:
+三个层级:
+- reasoning: 推理模型 (deepseek-reasoner 等)，用于 autonomous planner 的规划步骤
 - deep_think: 深度推理模型 (GPT-4o, Claude Sonnet 等)，用于 decision/risk 等高权重 agent
 - quick_think: 快速模型 (GPT-4o-mini, Claude Haiku 等)，用于 technical/intel 等信息提取 agent
 
 核心思想:
 - 信息提取类 agent (tech, intel) 对推理深度要求低，但输出量大 → quick 模型
 - 综合决策类 agent (decision, risk) 对推理质量要求高 → deep 模型
+- 自主规划的 planning 步骤需要最强推理能力 → reasoning 模型
 - 用户可通过 config 覆盖默认分配
 """
 
@@ -24,8 +26,9 @@ from typing import Dict, Optional
 
 class ModelTier(str, Enum):
     """模型层级"""
-    DEEP = "deep_think"    # 深度推理 (e.g. GPT-4o, Claude Sonnet)
-    QUICK = "quick_think"  # 快速提取 (e.g. GPT-4o-mini, Claude Haiku)
+    REASONING = "reasoning"    # 推理模型 (e.g. deepseek-reasoner) — 自主规划用
+    DEEP = "deep_think"        # 深度推理 (e.g. GPT-4o, Claude Sonnet)
+    QUICK = "quick_think"      # 快速提取 (e.g. GPT-4o-mini, Claude Haiku)
 
 
 # 默认 Agent → 层级映射
@@ -46,6 +49,10 @@ DEFAULT_TIER_MAP: Dict[str, ModelTier] = {
     "risk_conservative": ModelTier.QUICK,
     "risk_neutral": ModelTier.QUICK,
     "risk_manager": ModelTier.DEEP,
+    # Phase A: autonomous planner — 规划步骤用推理模型
+    "autonomous_planner": ModelTier.REASONING,
+    # Phase A: autonomous executor — 执行步骤用快速模型（调工具、提取信息）
+    "autonomous_executor": ModelTier.QUICK,
 }
 
 

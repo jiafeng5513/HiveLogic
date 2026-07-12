@@ -64,4 +64,13 @@ dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
     "python-multipart>=0.0.6",
+
+    # 代码执行沙箱 (Phase B) — Docker SDK for execute_python tool
+    "docker>=7.0.0",
+]
+
+[dependency-groups]
+# 开发/测试依赖（uv sync 默认安装 dev 组）。运行测试：uv run pytest tests/
+dev = [
+    "pytest>=8.0.0",
 ]
