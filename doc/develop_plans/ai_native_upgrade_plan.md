@@ -301,14 +301,14 @@ matplotlib，挂载只读数据卷）。沙箱容器无网络、无写权限、C
 
 ### 8.2 任务清单
 
-- [ ] **D.1 决策结果跟踪**
+- [x] **D.1 决策结果跟踪**
   - 新增 `server/src/services/decision_tracker.py`：
     - 决策入库时记录 `stock_code` / `decision_type` / `target_price` / `timestamp`。
     - 定时任务（复用 scheduler）：决策 N 天后（1/5/20 日）回看价格，计算收益，更新
       `decision_outcome` 字段（win/loss/neutral + 实际涨幅）。
     - 决策时 AI 可查"这只股上次我怎么说、对不对"（作为 context 注入）。
 
-- [ ] **D.2 策略权重学习**
+- [x] **D.2 策略权重学习**
   - 扩展 `ReflectionService`：
     - 统计每个 skill（策略）的历史胜率：`skill_id` / `total_calls` / `win_count` /
       `avg_return`。
@@ -317,21 +317,21 @@ matplotlib，挂载只读数据卷）。沙箱容器无网络、无写权限、C
     - 高胜率 skill 在报告中标注"历史验证有效"。
   - 保守起见：学习结果只影响排序和标注，不直接禁用任何 skill（用户可覆盖）。
 
-- [ ] **D.3 用户画像与偏好**
+- [x] **D.3 用户画像与偏好**
   - 新增 `server/src/models/user_profile.py`：`UserProfile` 表（account_id / risk_tolerance /
     holding_horizon / preferred_markets / preferred_sectors / excluded_stocks / notes）。
   - 扩展 `entitlement.py`：已登录用户分析时，自动注入用户画像到 agent context。
   - 分析建议考虑用户实际持仓（复用 `get_portfolio_snapshot` 工具）："你已持有新能源
     仓位 30%，再买这只会过度集中"。
 
-- [ ] **D.4 对话长记忆**
+- [x] **D.4 对话长记忆**
   - `conversation_manager` 扩展：跨 session 的"用户笔记"（用户告诉 AI 的长期偏好，
     如"我是长线投资者""我不碰 ST"）。
   - 用 Kimi 长上下文（128k/200k）承载完整对话历史 + 用户画像 + 历史决策，做"认识用户"
     的对话。
   - 关键偏好自动提取入库（AI 识别到用户表达偏好时，主动询问是否记入画像）。
 
-- [ ] **D.5 学习反馈闭环**
+- [x] **D.5 学习反馈闭环**
   - 管理面板新增"决策复盘"卡片：展示决策历史 + 实际结果 + 策略胜率统计。
   - 用户可标注"这个决策我执行了/没执行/结果如何"，反哺学习。
   - 定期生成"AI 自我评估报告"：本月决策胜率、哪些策略有效、哪些需调整。
