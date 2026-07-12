@@ -39,7 +39,11 @@ class ToolDefinition:
     description: str
     parameters: List[ToolParameter]
     handler: Callable
-    category: str = "data"  # data | analysis | search | action
+    category: str = "data"  # data | analysis | search | action | code
+    # When True, the tool is only exposed to agents that explicitly opt in
+    # (e.g. autonomous mode). This gates dangerous capabilities like code
+    # execution behind the appropriate orchestration mode.
+    requires_approval: bool = False
 
     # ----- Multi-provider schema converters -----
 
@@ -129,9 +133,21 @@ class ToolRegistry:
 
     # ----- Schema generation -----
 
-    def to_openai_tools(self) -> List[dict]:
-        """Generate OpenAI-format tools list (used by litellm for all providers)."""
-        return [t.to_openai_tool() for t in self._tools.values()]
+    def to_openai_tools(self, allow_approval_required: bool = False) -> List[dict]:
+        """Generate OpenAI-format tools list (used by litellm for all providers).
+
+        Args:
+            allow_approval_required: When False (secure default), tools with
+                ``requires_approval=True`` are omitted from the schema. This
+                lets callers (e.g. quick/deep modes) hide dangerous tools
+                like code execution while keeping them registered. Autonomous
+                mode passes True to expose the full toolset.
+        """
+        tools = [
+            t for t in self._tools.values()
+            if allow_approval_required or not t.requires_approval
+        ]
+        return [t.to_openai_tool() for t in tools]
 
     # ----- Execution -----
 
@@ -176,10 +192,16 @@ def tool(
     category: str = "data",
     parameters: Optional[List[ToolParameter]] = None,
     registry: Optional[ToolRegistry] = None,
+    requires_approval: bool = False,
 ):
     """Decorator to register a function as an agent tool.
 
     Parameters can be specified explicitly or inferred from type hints.
+
+    Args:
+        requires_approval: When True, the tool is only exposed to agents
+            that explicitly opt in via ``allow_approval_required=True``.
+            Use this for dangerous capabilities like code execution.
 
     Example::
 
@@ -200,6 +222,7 @@ def tool(
             parameters=params,
             handler=func,
             category=category,
+            requires_approval=requires_approval,
         )
 
         target_registry = registry or get_default_registry()
