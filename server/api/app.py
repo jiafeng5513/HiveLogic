@@ -17,6 +17,7 @@ FastAPI 应用工厂模块
 
 import mimetypes
 import os
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -32,24 +33,146 @@ from fastapi import WebSocket as FastAPIWebSocket
 from api.v1 import api_v1_router
 from api.middlewares.auth import add_auth_middleware
 from api.middlewares.error_handler import add_error_handlers
+from api.middlewares.rate_limit import add_rate_limit_middleware
+from api.middlewares.rest_tracker import RestClientTracker, RestClientTrackerMiddleware
 from api.v1.schemas.common import HealthResponse
 from src.services.system_config_service import SystemConfigService
 from src.services.realtime_ws import RealtimeWSRelay
+from src.scheduler import Scheduler
+# 注册 ORM 模型，确保 Base.metadata.create_all() 能创建 accounts 等表
+import src.models.accounts  # noqa: F401
+import src.models.user_profile  # noqa: F401 — Phase D.3: UserProfile 表
+import src.models.decision_feedback  # noqa: F401 — Phase D.5: DecisionFeedback 表
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     """Initialize and release shared services for the app lifecycle."""
     from src.services.download_engine import start_download_engine, stop_download_engine
+    from src.services.db_write_queue import get_db_write_queue
 
     app.state.system_config_service = SystemConfigService()
+
+    write_queue = get_db_write_queue()
+    await write_queue.start()
+
+    scheduler = _build_scheduler()
+    scheduler.run_in_background(run_catchup=True)
+    app.state.scheduler = scheduler
+
+    ws_relay = RealtimeWSRelay()
+    ws_relay.start_candle_flush_loop()
+    ws_relay.start_subscription_eviction_loop()
+    app.state.ws_relay = ws_relay
+
     await start_download_engine()
     try:
         yield
     finally:
         await stop_download_engine()
+        await ws_relay.stop_candle_flush_loop()
+        await ws_relay.stop_subscription_eviction_loop()
+        scheduler.stop()
+        await write_queue.stop()
         if hasattr(app.state, "system_config_service"):
             delattr(app.state, "system_config_service")
+
+
+def _build_scheduler() -> Scheduler:
+    from src.services.market_collector import get_market_collector
+    from src.services.symbol_list_service import get_symbol_list_service
+    from src.services.cache_maintenance import get_cache_maintenance
+
+    scheduler = Scheduler()
+    collector = get_market_collector()
+
+    def cn_stock_daily():
+        collector.collect_cn_stock()
+        collector.archive_daily_from_snapshot("cn_stock")
+
+    def hk_stock_daily():
+        collector.collect_hk_stock()
+        collector.archive_daily_from_snapshot("hk_stock")
+
+    def us_stock_daily():
+        collector.collect_us_stock()
+        collector.archive_daily_from_snapshot("us_stock")
+
+    def crypto_daily():
+        collector.collect_crypto()
+        collector.archive_daily_from_snapshot("crypto")
+
+    def refresh_symbol_lists():
+        svc = get_symbol_list_service()
+        for mkt in ("cn_stock", "cn_etf", "hk_stock", "us_stock", "crypto"):
+            try:
+                svc.get_symbols(mkt, force_refresh=True)
+            except Exception:
+                pass
+
+    def run_maintenance():
+        get_cache_maintenance().run_full_cleanup()
+
+    def nightly_gap_reconcile():
+        # 已收盘市场（A股/港股，CST 02:00 时均已收盘）的日线幂等补全，
+        # 作为各市场 daily 任务「运行但失败」的兜底；US/crypto 此刻未收线，交由其自身任务 + catch-up。
+        collector.collect_cn_stock()
+        collector.archive_daily_from_snapshot("cn_stock")
+        collector.collect_cn_etf()
+        collector.archive_daily_from_snapshot("cn_etf")
+        collector.collect_hk_stock()
+        collector.archive_daily_from_snapshot("hk_stock")
+        # 缺口观测：记录各市场日线新鲜度，供管理面板/告警参考
+        try:
+            report = get_cache_maintenance().get_daily_freshness()
+            logger.info("[Scheduler] 夜间缺口对账 - 日线新鲜度: %s", report)
+        except Exception as e:
+            logger.warning("[Scheduler] 夜间缺口对账新鲜度统计失败: %s", e)
+
+    def run_backup():
+        import subprocess
+        db_path = os.environ.get("DATABASE_PATH", "./data/stock_analysis.db")
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        script = repo_root / "deploy" / "backup_db.sh"
+        if not script.exists():
+            logger.warning("[Scheduler] backup_db.sh not found, skipping backup")
+            return
+        try:
+            result = subprocess.run(
+                ["bash", str(script)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                env={**os.environ, "DATABASE_PATH": db_path},
+            )
+            if result.returncode != 0:
+                logger.error("[Scheduler] Backup failed: %s", result.stderr.strip())
+            else:
+                logger.info("[Scheduler] Backup completed: %s", result.stdout.strip())
+        except subprocess.TimeoutExpired:
+            logger.error("[Scheduler] Backup timed out after 300s")
+        except Exception as e:
+            logger.error("[Scheduler] Backup error: %s", e)
+
+    def verify_decisions():
+        """Phase D.1: 回看已到期决策的实际收益并更新验证字段。"""
+        from src.services.decision_tracker import DecisionTracker
+
+        tracker = DecisionTracker()
+        return tracker.verify_pending_decisions()
+
+    scheduler.add_named_daily_task("cn_stock_daily", "15:30", cn_stock_daily)
+    scheduler.add_named_daily_task("hk_stock_daily", "16:30", hk_stock_daily)
+    scheduler.add_named_daily_task("us_stock_daily", "06:00", us_stock_daily)
+    scheduler.add_named_daily_task("crypto_daily", "08:10", crypto_daily)
+    scheduler.add_named_daily_task("symbol_list_refresh", "07:00", refresh_symbol_lists)
+    scheduler.add_named_daily_task("nightly_gap_reconcile", "02:00", nightly_gap_reconcile)
+    scheduler.add_named_daily_task("db_maintenance", "03:30", run_maintenance)
+    scheduler.add_named_daily_task("db_backup", "03:00", run_backup)
+    scheduler.add_named_daily_task("decision_verification", "04:00", verify_decisions)
+    return scheduler
 
 
 def create_app(static_dir: Optional[Path] = None) -> FastAPI:
@@ -112,7 +235,10 @@ def create_app(static_dir: Optional[Path] = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    add_rate_limit_middleware(app)
     add_auth_middleware(app)
+    app.state.rest_client_tracker = RestClientTracker(max_entries=500)
+    app.add_middleware(RestClientTrackerMiddleware, tracker=app.state.rest_client_tracker)
     
     # ============================================================
     # 注册路由

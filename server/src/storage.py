@@ -606,6 +606,8 @@ class ConversationMessage(Base):
     role = Column(String(20), nullable=False)  # user, assistant, system
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.now, index=True)
+    # Phase D.4: account_id 用于跨 session 查询用户历史
+    account_id = Column(Integer, nullable=True, index=True)
 
 
 class LLMUsage(Base):
@@ -692,6 +694,11 @@ class DatabaseManager:
         # 创建所有表
         Base.metadata.create_all(self._engine)
 
+        # 迁移：为已有 decision_log 表补齐 Phase D 新增列（ALTER TABLE 增量迁移）
+        self._migrate_decision_log_columns()
+        # 迁移：为已有 conversation_messages 表补齐 Phase D.4 account_id 列
+        self._migrate_conversation_message_columns()
+
         self._initialized = True
         logger.info(f"数据库初始化完成: {db_url}")
 
@@ -751,6 +758,92 @@ class DatabaseManager:
     def _is_file_sqlite_database(self) -> bool:
         database = (self._engine.url.database or "").strip()
         return bool(database) and database.lower() != ":memory:"
+
+    def _migrate_decision_log_columns(self) -> None:
+        """增量迁移：为已有 decision_log 表补齐 Phase D 新增列。
+
+        SQLite 的 ``ALTER TABLE ADD COLUMN`` 不能在 ``IF NOT EXISTS`` 下执行，
+        因此采用 try-SELECT-except-OperationalError 模式检测列存在性后补列。
+        """
+        if not self._is_sqlite_engine:
+            return
+
+        # (列名, 列定义 SQL)
+        new_columns: List[tuple] = [
+            ("target_price", "REAL"),
+            ("skill_ids_json", "TEXT"),
+            ("account_id", "INTEGER"),
+            ("outcome", "VARCHAR(10)"),
+            ("return_1d_pct", "REAL"),
+            ("return_20d_pct", "REAL"),
+        ]
+
+        with self._engine.connect() as conn:
+            for col_name, col_type in new_columns:
+                try:
+                    conn.exec_driver_sql(f"SELECT {col_name} FROM decision_log LIMIT 1")
+                except OperationalError:
+                    logger.info("[DB] 迁移: 为 decision_log 添加 %s 列", col_name)
+                    try:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE decision_log ADD COLUMN {col_name} {col_type}"
+                        )
+                        conn.commit()
+                    except OperationalError as exc:
+                        logger.warning(
+                            "[DB] 迁移 decision_log.%s 失败: %s", col_name, exc
+                        )
+
+            # 为 account_id 建索引（若不存在）
+            try:
+                conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_decision_log_account_time "
+                    "ON decision_log(account_id, created_at)"
+                )
+                conn.commit()
+            except OperationalError as exc:
+                logger.debug("[DB] 创建 decision_log account_id 索引失败: %s", exc)
+
+    def _migrate_conversation_message_columns(self) -> None:
+        """增量迁移：为已有 conversation_messages 表补齐 Phase D.4 account_id 列。"""
+        if not self._is_sqlite_engine:
+            return
+
+        new_columns: List[tuple] = [
+            ("account_id", "INTEGER"),
+        ]
+
+        with self._engine.connect() as conn:
+            for col_name, col_type in new_columns:
+                try:
+                    conn.exec_driver_sql(
+                        f"SELECT {col_name} FROM conversation_messages LIMIT 1"
+                    )
+                except OperationalError:
+                    logger.info("[DB] 迁移: 为 conversation_messages 添加 %s 列", col_name)
+                    try:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE conversation_messages ADD COLUMN {col_name} {col_type}"
+                        )
+                        conn.commit()
+                    except OperationalError as exc:
+                        logger.warning(
+                            "[DB] 迁移 conversation_messages.%s 失败: %s",
+                            col_name,
+                            exc,
+                        )
+
+            # 为 account_id 建索引（若不存在）
+            try:
+                conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_conversation_messages_account "
+                    "ON conversation_messages(account_id)"
+                )
+                conn.commit()
+            except OperationalError as exc:
+                logger.debug(
+                    "[DB] 创建 conversation_messages account_id 索引失败: %s", exc
+                )
 
     def _run_write_transaction(
         self,
@@ -1871,15 +1964,24 @@ class DatabaseManager:
         digest = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
         return f"no-url:{code}:{digest}"
 
-    def save_conversation_message(self, session_id: str, role: str, content: str) -> None:
+    def save_conversation_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        account_id: Optional[int] = None,
+    ) -> None:
         """
         保存 Agent 对话消息
+
+        Phase D.4: 新增 account_id 参数，用于跨 session 查询用户历史。
         """
         with self.session_scope() as session:
             msg = ConversationMessage(
                 session_id=session_id,
                 role=role,
-                content=content
+                content=content,
+                account_id=account_id,
             )
             session.add(msg)
 
@@ -1895,6 +1997,175 @@ class DatabaseManager:
 
             # 倒序返回，保证时间顺序
             return [{"role": msg.role, "content": msg.content} for msg in reversed(messages)]
+
+    # ──────────────────────────────────────────────────────────────
+    # Phase D.4: UserNote 长记忆 + 跨 session 查询
+    # ──────────────────────────────────────────────────────────────
+
+    def add_user_note(
+        self,
+        account_id: int,
+        content: str,
+        source: str = "user_explicit",
+        category: str = "preference",
+    ) -> int:
+        """添加用户长期笔记，返回新笔记 id。"""
+        from src.models.user_profile import UserNote
+
+        with self.session_scope() as session:
+            note = UserNote(
+                account_id=account_id,
+                content=content,
+                source=source,
+                category=category,
+                is_active=True,
+            )
+            session.add(note)
+            session.flush()
+            return int(note.id)
+
+    def get_active_user_notes(
+        self,
+        account_id: int,
+        category: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """获取账户下激活的长期笔记（可按 category 过滤）。"""
+        from src.models.user_profile import UserNote
+
+        with self.session_scope() as session:
+            stmt = select(UserNote).where(
+                UserNote.account_id == account_id,
+                UserNote.is_active.is_(True),
+            )
+            if category:
+                stmt = stmt.where(UserNote.category == category)
+            stmt = stmt.order_by(UserNote.created_at.desc())
+            notes = session.execute(stmt).scalars().all()
+            return [n.to_dict() for n in notes]
+
+    def deactivate_user_note(self, note_id: int, account_id: Optional[int] = None) -> bool:
+        """禁用一条用户笔记（软删除）。返回是否成功更新。"""
+        from src.models.user_profile import UserNote
+
+        with self.session_scope() as session:
+            stmt = select(UserNote).where(UserNote.id == note_id)
+            if account_id is not None:
+                stmt = stmt.where(UserNote.account_id == account_id)
+            note = session.execute(stmt).scalar_one_or_none()
+            if note is None:
+                return False
+            note.is_active = False
+            return True
+
+    def get_recent_user_messages_by_account(
+        self,
+        account_id: int,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """跨 session 获取该账户最近的 user 消息（供长记忆提取）。"""
+        with self.session_scope() as session:
+            stmt = (
+                select(ConversationMessage)
+                .where(
+                    ConversationMessage.account_id == account_id,
+                    ConversationMessage.role == "user",
+                )
+                .order_by(ConversationMessage.created_at.desc())
+                .limit(limit)
+            )
+            msgs = session.execute(stmt).scalars().all()
+            return [
+                {
+                    "session_id": m.session_id,
+                    "content": m.content,
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                }
+                for m in msgs
+            ]
+
+    # ──────────────────────────────────────────────────────────────
+    # Phase D.5: DecisionFeedback 学习反馈闭环
+    # ──────────────────────────────────────────────────────────────
+
+    def add_decision_feedback(
+        self,
+        decision_log_id: int,
+        execution_status: str,
+        account_id: Optional[int] = None,
+        user_outcome: Optional[str] = None,
+        user_return_pct: Optional[float] = None,
+        notes: Optional[str] = None,
+        source: str = "user",
+    ) -> int:
+        """添加决策反馈，返回新反馈 id。"""
+        from src.models.decision_feedback import DecisionFeedback
+
+        with self.session_scope() as session:
+            fb = DecisionFeedback(
+                decision_log_id=decision_log_id,
+                account_id=account_id,
+                execution_status=execution_status,
+                user_outcome=user_outcome,
+                user_return_pct=user_return_pct,
+                notes=notes,
+                source=source,
+            )
+            session.add(fb)
+            session.flush()
+            return int(fb.id)
+
+    def get_decision_feedback(
+        self,
+        decision_log_id: int,
+    ) -> List[Dict[str, Any]]:
+        """获取某条决策的所有反馈。"""
+        from src.models.decision_feedback import DecisionFeedback
+
+        with self.session_scope() as session:
+            stmt = (
+                select(DecisionFeedback)
+                .where(DecisionFeedback.decision_log_id == decision_log_id)
+                .order_by(DecisionFeedback.created_at.desc())
+            )
+            items = session.execute(stmt).scalars().all()
+            return [f.to_dict() for f in items]
+
+    def list_recent_decision_logs(
+        self,
+        account_id: Optional[int] = None,
+        stock_code: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """列出最近的决策日志（含验证结果），供管理面板复盘卡片展示。"""
+        from src.agent.reflection.models import DecisionLog
+
+        with self.session_scope() as session:
+            stmt = select(DecisionLog)
+            if account_id is not None:
+                stmt = stmt.where(DecisionLog.account_id == account_id)
+            if stock_code:
+                stmt = stmt.where(DecisionLog.stock_code == stock_code)
+            stmt = stmt.order_by(DecisionLog.created_at.desc()).limit(limit).offset(offset)
+            items = session.execute(stmt).scalars().all()
+            return [d.to_dict() for d in items]
+
+    def count_decision_logs(
+        self,
+        account_id: Optional[int] = None,
+        stock_code: Optional[str] = None,
+    ) -> int:
+        """统计决策日志总数（分页用）。"""
+        from src.agent.reflection.models import DecisionLog
+        from sqlalchemy import func as _func
+
+        with self.session_scope() as session:
+            stmt = select(_func.count(DecisionLog.id))
+            if account_id is not None:
+                stmt = stmt.where(DecisionLog.account_id == account_id)
+            if stock_code:
+                stmt = stmt.where(DecisionLog.stock_code == stock_code)
+            return int(session.execute(stmt).scalar() or 0)
 
     def conversation_session_exists(self, session_id: str) -> bool:
         """Return True when at least one message exists for the given session."""

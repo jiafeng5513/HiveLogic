@@ -9,7 +9,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -40,6 +40,24 @@ TOOL_DISPLAY_NAMES: Dict[str, str] = {
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _inject_user_profile(ctx: Dict[str, Any], fastapi_request: Request) -> Dict[str, Any]:
+    """Phase D.3: 若客户端账号已鉴权，注入 account_id + user_profile 到 context。
+
+    客户端鉴权未启用时 ``request.state.client_account`` 为 None，直接跳过（内网零影响）。
+    """
+    account = getattr(fastapi_request.state, "client_account", None)
+    if account is None:
+        return ctx
+    try:
+        from src.services.user_profile_service import get_user_profile_service
+
+        service = get_user_profile_service()
+        return service.inject_profile_into_context(ctx, account.id)
+    except Exception as exc:
+        logger.debug("[Agent] user profile injection skipped: %s", exc)
+        return ctx
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -151,7 +169,7 @@ async def get_strategies():
     )
 
 @router.post("/chat", response_model=ChatResponse)
-async def agent_chat(request: ChatRequest):
+async def agent_chat(request: ChatRequest, fastapi_request: Request):
     """
     Chat with the AI Agent.
     """
@@ -172,6 +190,9 @@ async def agent_chat(request: ChatRequest):
         ctx = dict(request.context or {})
         if skills is not None:
             ctx["skills"] = skills
+
+        # Phase D.3: inject user profile if client account is authenticated
+        ctx = _inject_user_profile(ctx, fastapi_request)
 
         # Offload the blocking call to a thread to avoid blocking the event loop.
         loop = asyncio.get_running_loop()
@@ -384,7 +405,7 @@ async def agent_research(request: ResearchRequest):
 
 
 @router.post("/chat/stream")
-async def agent_chat_stream(request: ChatRequest):
+async def agent_chat_stream(request: ChatRequest, fastapi_request: Request):
     """
     Chat with the AI Agent, streaming progress via SSE.
     Each SSE event is a JSON object with a 'type' field:
@@ -420,6 +441,9 @@ async def agent_chat_stream(request: ChatRequest):
         stream_ctx["agent_id"] = request.agent_id
     if request.images:
         stream_ctx["images"] = request.images
+
+    # Phase D.3: inject user profile if client account is authenticated
+    stream_ctx = _inject_user_profile(stream_ctx, fastapi_request)
 
     def progress_callback(event: dict):
         # Enrich tool events with display names
@@ -516,3 +540,45 @@ async def agent_chat_stream(request: ChatRequest):
             "Connection": "keep-alive",
         },
     )
+
+
+# ==================== Phase D.5: 决策反馈提交 ====================
+
+
+class DecisionFeedbackRequest(BaseModel):
+    """用户对某条决策的执行反馈。"""
+    decision_log_id: int
+    execution_status: str  # executed / not_executed / partial
+    user_outcome: Optional[str] = None  # profit / loss / breakeven / pending
+    user_return_pct: Optional[float] = None
+    notes: Optional[str] = None
+
+
+@router.post(
+    "/decision-feedback",
+    summary="Submit user feedback on a decision",
+    description="Phase D.5: 用户标注某条决策的执行情况与实际结果，反哺 skill 学习。",
+)
+async def submit_decision_feedback(
+    request: Request,
+    body: DecisionFeedbackRequest,
+):
+    account = getattr(request.state, "client_account", None)
+    account_id = account.id if account is not None else None
+
+    try:
+        from src.storage import get_db
+
+        fb_id = get_db().add_decision_feedback(
+            decision_log_id=body.decision_log_id,
+            execution_status=body.execution_status,
+            account_id=account_id,
+            user_outcome=body.user_outcome,
+            user_return_pct=body.user_return_pct,
+            notes=body.notes,
+            source="user",
+        )
+        return {"success": True, "feedback_id": fb_id}
+    except Exception as exc:
+        logger.exception("[Agent] 决策反馈提交失败")
+        raise HTTPException(status_code=500, detail=f"提交反馈失败: {exc}")

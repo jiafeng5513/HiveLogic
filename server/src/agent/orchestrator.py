@@ -336,10 +336,17 @@ class AgentOrchestrator:
         ctx = self._build_context(message, context)
         ctx.session_id = session_id
 
-        session = conversation_manager.get_or_create(session_id)
+        # Phase D.4: account_id 从 context 透传到 conversation session（跨 session 归属）
+        account_id = context.get("account_id") if context else None
+
+        session = conversation_manager.get_or_create(session_id, account_id=account_id)
         history = session.get_history()
         if history:
             ctx.meta["conversation_history"] = history
+
+        # Phase D.4: 注入跨 session 长记忆（用户长期笔记）
+        if account_id is not None:
+            self._inject_user_notes(ctx, account_id)
 
         # Determine response mode: first analysis in quick/deep → dashboard;
         # follow-up or pure chat → free-form text.
@@ -347,7 +354,9 @@ class AgentOrchestrator:
         ctx.meta["response_mode"] = "dashboard" if use_dashboard else "chat"
 
         # Persist user turn
-        conversation_manager.add_message(session_id, "user", message)
+        conversation_manager.add_message(
+            session_id, "user", message, account_id=account_id
+        )
 
         orch_result = self._execute_pipeline(
             ctx,
@@ -357,11 +366,14 @@ class AgentOrchestrator:
 
         # Persist assistant response
         if orch_result.success:
-            conversation_manager.add_message(session_id, "assistant", orch_result.content)
+            conversation_manager.add_message(
+                session_id, "assistant", orch_result.content, account_id=account_id
+            )
         else:
             conversation_manager.add_message(
                 session_id, "assistant",
                 f"[分析失败] {orch_result.error or '未知错误'}",
+                account_id=account_id,
             )
 
         return AgentResult(
@@ -449,6 +461,8 @@ class AgentOrchestrator:
 
         # ── Phase 3: Reflection injection ──
         self._inject_reflection(ctx)
+        # ── Phase D.3: User profile injection ──
+        self._inject_user_profile(ctx)
 
         # Minimum seconds required for a stage to do useful work.  Starting
         # a stage with less budget virtually guarantees a timeout that wastes
@@ -960,6 +974,80 @@ class AgentOrchestrator:
         except Exception as exc:
             logger.warning("[Orchestrator] reflection injection failed: %s", exc)
 
+    def _inject_user_profile(self, ctx: AgentContext) -> None:
+        """Phase D.3: 将用户画像注入 agent context（供各 agent 读取参考）。"""
+        profile = ctx.meta.get("user_profile")
+        if not profile:
+            return
+
+        try:
+            lines = ["## User Profile (Personalized Context)"]
+            risk = profile.get("risk_tolerance", "moderate")
+            horizon = profile.get("holding_horizon", "mid_term")
+            lines.append(f"- Risk tolerance: {risk}")
+            lines.append(f"- Holding horizon: {horizon}")
+
+            preferred_sectors = profile.get("preferred_sectors") or []
+            if preferred_sectors:
+                lines.append(f"- Preferred sectors: {', '.join(preferred_sectors)}")
+
+            excluded = profile.get("excluded_stocks") or []
+            if excluded:
+                lines.append(f"- Excluded stocks/segments: {', '.join(excluded)}")
+
+            notes = (profile.get("notes") or "").strip()
+            if notes:
+                lines.append(f"- User notes: {notes}")
+
+            lines.append(
+                "Tailor your analysis to this user's profile. "
+                "Flag concentration risk if the user already holds relevant positions. "
+                "Respect excluded stocks/segments in recommendations."
+            )
+
+            ctx.set_data("user_profile_prompt", "\n".join(lines))
+            logger.info(
+                "[Orchestrator] user profile injected for account_id=%s",
+                profile.get("account_id"),
+            )
+        except Exception as exc:
+            logger.warning("[Orchestrator] user profile injection failed: %s", exc)
+
+    def _inject_user_notes(self, ctx: AgentContext, account_id: int) -> None:
+        """Phase D.4: 注入用户跨 session 长期笔记（偏好/约束/目标）。
+
+        从 ``user_notes`` 表读取该账户激活的长期笔记，拼成 prompt 注入 ctx，
+        让各 agent 在分析时记住用户跨 session 表达过的偏好与约束。
+        """
+        try:
+            from src.storage import get_db
+
+            notes = get_db().get_active_user_notes(account_id)
+            if not notes:
+                return
+
+            lines = ["## User Long-Term Notes (Cross-Session Memory)"]
+            for note in notes:
+                cat = note.get("category", "preference")
+                content = (note.get("content") or "").strip()
+                if not content:
+                    continue
+                lines.append(f"- [{cat}] {content}")
+
+            lines.append(
+                "These are long-term preferences the user has expressed across sessions. "
+                "Honor them in your analysis and flag any conflicts."
+            )
+
+            ctx.set_data("user_notes_prompt", "\n".join(lines))
+            logger.info(
+                "[Orchestrator] user notes injected for account_id=%s (%d notes)",
+                account_id,
+                len(notes),
+            )
+        except Exception as exc:
+            logger.warning("[Orchestrator] user notes injection failed: %s", exc)
+
     def _record_decision_log(self, ctx: AgentContext) -> None:
         """Record the final decision for future reflection."""
         if not (self.config and getattr(self.config, "agent_reflection_enabled", False)):
@@ -980,11 +1068,40 @@ class AgentOrchestrator:
         try:
             from src.agent.reflection.service import ReflectionService
             from src.agent.reflection.repository import ReflectionRepository
+            from src.agent.skills.defaults import extract_skill_id, is_skill_agent_name
             from src.storage import DatabaseManager
 
             db = DatabaseManager.get_instance()
             repo = ReflectionRepository(db.session_scope)
             service = ReflectionService(repo)
+
+            # Phase D: collect skill_ids from all skill-agent opinions
+            skill_ids = [
+                sid
+                for op in ctx.opinions
+                if is_skill_agent_name(op.agent_name)
+                and (sid := extract_skill_id(op.agent_name))
+            ]
+
+            # Phase D: target_price — prefer realtime quote, fall back to key_levels
+            target_price: Optional[float] = None
+            realtime = ctx.get_data("realtime_quote")
+            if isinstance(realtime, dict):
+                for price_key in ("price", "current_price", "last", "close"):
+                    val = realtime.get(price_key)
+                    if isinstance(val, (int, float)) and val > 0:
+                        target_price = float(val)
+                        break
+            if target_price is None and decision_op.key_levels:
+                for level_key in ("entry", "current", "close", "support"):
+                    val = decision_op.key_levels.get(level_key)
+                    if isinstance(val, (int, float)) and val > 0:
+                        target_price = float(val)
+                        break
+
+            # Phase D: account_id from context (set by entitlement layer in D.3)
+            account_id = ctx.meta.get("account_id")
+
             service.record_decision(
                 stock_code=ctx.stock_code,
                 stock_name=ctx.stock_name or "",
@@ -997,6 +1114,9 @@ class AgentOrchestrator:
                 debate_summary=ctx.get_data("debate_history"),
                 autonomous_plan=ctx.get_data("autonomous_plan"),
                 autonomous_step_reasoning=ctx.get_data("autonomous_step_reasoning"),
+                skill_ids=skill_ids or None,
+                account_id=account_id,
+                target_price=target_price,
             )
         except Exception as exc:
             logger.warning("[Orchestrator] decision recording failed: %s", exc)
@@ -1019,8 +1139,16 @@ class AgentOrchestrator:
             ctx.meta["strategies_requested"] = requested_skills or []
             ctx.meta["report_language"] = normalize_report_language(context.get("report_language", "zh"))
 
+            # Phase D.3: 透传 account_id 与 user_profile（由 entitlement/endpoint 层注入）
+            account_id = context.get("account_id")
+            if account_id is not None:
+                ctx.meta["account_id"] = account_id
+            user_profile = context.get("user_profile")
+            if user_profile:
+                ctx.meta["user_profile"] = user_profile
+
             # Pre-populate data fields that the caller already has
-            for data_key in ("realtime_quote", "daily_history", "chip_distribution",
+            for data_key in ("realtime_quote", "daily_history", "chip distribution",
                              "trend_result", "news_context"):
                 if context.get(data_key):
                     ctx.set_data(data_key, context[data_key])
