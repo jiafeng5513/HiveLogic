@@ -43,6 +43,7 @@ from src.scheduler import Scheduler
 import src.models.accounts  # noqa: F401
 import src.models.user_profile  # noqa: F401 — Phase D.3: UserProfile 表
 import src.models.decision_feedback  # noqa: F401 — Phase D.5: DecisionFeedback 表
+import src.models.proactive_message  # noqa: F401 — Phase E: ProactiveMessage 表
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,14 @@ async def app_lifespan(app: FastAPI):
     app.state.ws_relay = ws_relay
 
     await start_download_engine()
+
+    # Phase E.2: 启动主动分析器（订阅异动事件 → 轻量 AI 分析）
+    from src.services.proactive_analyzer import get_proactive_analyzer
+    proactive_analyzer = get_proactive_analyzer()
+    if proactive_analyzer is not None:
+        proactive_analyzer.start()
+        app.state.proactive_analyzer = proactive_analyzer
+        logger.info("[App] 主动分析器已启动")
     try:
         yield
     finally:
@@ -75,6 +84,9 @@ async def app_lifespan(app: FastAPI):
         await ws_relay.stop_candle_flush_loop()
         await ws_relay.stop_subscription_eviction_loop()
         scheduler.stop()
+        if hasattr(app.state, "proactive_analyzer"):
+            app.state.proactive_analyzer.stop()
+            delattr(app.state, "proactive_analyzer")
         await write_queue.stop()
         if hasattr(app.state, "system_config_service"):
             delattr(app.state, "system_config_service")
@@ -163,6 +175,16 @@ def _build_scheduler() -> Scheduler:
         tracker = DecisionTracker()
         return tracker.verify_pending_decisions()
 
+    def anomaly_scan():
+        """Phase E.1: 异动监控引擎 — 扫描自选+持仓。"""
+        from src.services.anomaly_monitor import run_anomaly_scan
+        return run_anomaly_scan()
+
+    def opportunity_scan():
+        """Phase E.3: 盘后机会扫描 — 全市场筛选 → top N 深度分析。"""
+        from src.services.opportunity_scanner import run_opportunity_scan
+        return run_opportunity_scan()
+
     scheduler.add_named_daily_task("cn_stock_daily", "15:30", cn_stock_daily)
     scheduler.add_named_daily_task("hk_stock_daily", "16:30", hk_stock_daily)
     scheduler.add_named_daily_task("us_stock_daily", "06:00", us_stock_daily)
@@ -172,6 +194,37 @@ def _build_scheduler() -> Scheduler:
     scheduler.add_named_daily_task("db_maintenance", "03:30", run_maintenance)
     scheduler.add_named_daily_task("db_backup", "03:00", run_backup)
     scheduler.add_named_daily_task("decision_verification", "04:00", verify_decisions)
+
+    # Phase E.1: 异动监控后台任务（按配置间隔轮询，仅在启用时生效）
+    from src.config import get_config as _get_cfg
+    _cfg = _get_cfg()
+    if getattr(_cfg, "agent_anomaly_monitor_enabled", False):
+        _interval_min = getattr(_cfg, "agent_anomaly_scan_interval_minutes", 5)
+        scheduler.add_background_task(
+            anomaly_scan,
+            interval_seconds=max(30, _interval_min * 60),
+            run_immediately=False,
+            name="anomaly_scan",
+        )
+        logger.info(
+            "[Scheduler] 异动监控后台任务已注册 (间隔 %d 分钟)", _interval_min
+        )
+
+    # Phase E.3: 盘后机会扫描（命名每日任务，仅在启用时生效）
+    if getattr(_cfg, "agent_opportunity_scan_enabled", False):
+        _scan_time = getattr(_cfg, "agent_opportunity_scan_time", "18:30")
+        scheduler.add_named_daily_task(
+            "opportunity_scan",
+            _scan_time,
+            opportunity_scan,
+            run_catchup_on_start=True,
+        )
+        logger.info(
+            "[Scheduler] 机会扫描任务已注册 @ %s (top_n=%d)",
+            _scan_time,
+            getattr(_cfg, "agent_opportunity_scan_top_n", 10),
+        )
+
     return scheduler
 
 
