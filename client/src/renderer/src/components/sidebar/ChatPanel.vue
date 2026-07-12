@@ -131,8 +131,8 @@ const streamingMessage = computed<ChatMessageType | null>(() => {
 
 // ==================== 事件处理 ====================
 
-function onSend(text: string) {
-  sendMessage(text)
+function onSend(text: string, images: string[] = []) {
+  sendMessage(text, { images: images.length > 0 ? images : undefined })
 }
 
 function onQuickSend(text: string, skill?: string) {

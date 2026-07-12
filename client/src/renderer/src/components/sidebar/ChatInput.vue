@@ -39,8 +39,47 @@
       </div>
     </div>
 
+    <!-- 图片预览区 -->
+    <div v-if="attachedImages.length > 0" class="image-preview-area">
+      <div
+        v-for="(img, index) in attachedImages"
+        :key="index"
+        class="image-preview-item"
+      >
+        <img :src="img" alt="attachment" />
+        <button
+          class="image-remove-btn"
+          title="移除"
+          @click="removeImage(index)"
+        >×</button>
+      </div>
+    </div>
+
     <!-- 输入框 -->
-    <div class="chat-input-wrapper">
+    <div
+      class="chat-input-wrapper"
+      :class="{ 'drag-over': isDragOver }"
+      @drop="onDrop"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+    >
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept="image/*"
+        multiple
+        style="display:none"
+        @change="onFileChange"
+      />
+      <button
+        class="chat-attach-btn"
+        title="上传图片 (可多选)"
+        @click="triggerFileInput"
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M14.5 6.5L8 13l-6.5-6.5a4.5 4.5 0 0 1 6.4-6.4l.1.1.1-.1a4.5 4.5 0 0 1 6.4 6.4z" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        </svg>
+      </button>
       <textarea
         ref="inputRef"
         v-model="inputText"
@@ -49,6 +88,7 @@
         :placeholder="placeholder"
         @keydown="handleKeydown"
         @input="autoResize"
+        @paste="onPaste"
       ></textarea>
       <button
         v-if="isStreaming"
@@ -61,7 +101,7 @@
       <button
         v-else
         class="chat-send-btn"
-        :disabled="!inputText.trim()"
+        :disabled="!inputText.trim() && attachedImages.length === 0"
         title="发送 (Enter)"
         @click="send"
       >
@@ -86,15 +126,22 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'send': [text: string]
+  'send': [text: string, images: string[]]
   'stop': []
   'mode-change': [mode: ChatMode]
   'skill-toggle': [skillId: string]
 }>()
 
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 const inputText = ref('')
 const showSkillDropdown = ref(false)
+const attachedImages = ref<string[]>([])
+const isDragOver = ref(false)
+
+// 单张图片大小上限 ~5MB (base64 后)
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024
+const MAX_IMAGES = 4
 
 const modeLabels: Record<ChatMode, { label: string; desc: string }> = {
   chat: { label: '对话', desc: '自由对话，纯 LLM 问答' },
@@ -132,10 +179,11 @@ function handleKeydown(e: KeyboardEvent) {
 
 function send() {
   const text = inputText.value.trim()
-  if (!text) return
+  const images = [...attachedImages.value]
+  if (!text && images.length === 0) return
 
-  // 斜杠命令解析
-  if (text.startsWith('/mode ')) {
+  // 斜杠命令解析 (仅在有文本且无图片时生效)
+  if (text.startsWith('/mode ') && images.length === 0) {
     const mode = text.slice(6).trim() as ChatMode
     if (props.allowedModes.includes(mode)) {
       emit('mode-change', mode)
@@ -144,9 +192,91 @@ function send() {
     return
   }
 
-  emit('send', text)
+  emit('send', text, images)
   inputText.value = ''
+  attachedImages.value = []
   nextTick(() => autoResize())
+}
+
+// ==================== 图片处理 ====================
+
+/**
+ * 将 File 转为 data URL (base64)
+ */
+function fileToDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * 处理 File 列表, 转为 data URL 并追加到 attachedImages (受 MAX_IMAGES / MAX_IMAGE_SIZE 限制)
+ */
+async function handleFiles(files: FileList | File[]) {
+  const arr = Array.from(files).filter(f => f.type.startsWith('image/'))
+  for (const file of arr) {
+    if (attachedImages.value.length >= MAX_IMAGES) break
+    if (file.size > MAX_IMAGE_SIZE) continue
+    try {
+      const dataUrl = await fileToDataURL(file)
+      attachedImages.value.push(dataUrl)
+    } catch {
+      // 跳过读取失败的文件
+    }
+  }
+}
+
+function onPaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  const imageFiles: File[] = []
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) imageFiles.push(file)
+    }
+  }
+  if (imageFiles.length > 0) {
+    e.preventDefault()
+    handleFiles(imageFiles)
+  }
+}
+
+function onDrop(e: DragEvent) {
+  e.preventDefault()
+  isDragOver.value = false
+  if (e.dataTransfer?.files) {
+    handleFiles(e.dataTransfer.files)
+  }
+}
+
+function onDragOver(e: DragEvent) {
+  e.preventDefault()
+  isDragOver.value = true
+}
+
+function onDragLeave(e: DragEvent) {
+  e.preventDefault()
+  isDragOver.value = false
+}
+
+function onFileChange(e: Event) {
+  const target = e.target as HTMLInputElement
+  if (target.files) {
+    handleFiles(target.files)
+    target.value = '' // 允许重复选择同一文件
+  }
+}
+
+function removeImage(index: number) {
+  attachedImages.value.splice(index, 1)
+}
+
+function triggerFileInput() {
+  fileInputRef.value?.click()
 }
 
 function autoResize() {
@@ -277,6 +407,30 @@ defineExpose({ focus })
   border-color: #0e639c;
 }
 
+.chat-input-wrapper.drag-over {
+  border-color: #0e639c;
+  background: #1a2a3a;
+}
+
+.chat-attach-btn {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.chat-attach-btn:hover {
+  color: #ccc;
+  background: #333;
+}
+
 .chat-input {
   flex: 1;
   background: none;
@@ -331,5 +485,53 @@ defineExpose({ focus })
 
 .chat-stop-btn:hover {
   background: #c43c3c;
+}
+
+/* 图片预览区 */
+.image-preview-area {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 4px 2px;
+  margin-bottom: 4px;
+}
+
+.image-preview-item {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #444;
+  flex-shrink: 0;
+}
+
+.image-preview-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-remove-btn {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.image-remove-btn:hover {
+  background: rgba(168, 50, 50, 0.9);
 }
 </style>

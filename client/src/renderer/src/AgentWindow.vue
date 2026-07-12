@@ -37,7 +37,18 @@
           <template v-for="msg in messages" :key="msg.id">
             <!-- 用户消息 -->
             <div v-if="msg.role === 'user'" class="aw-msg aw-msg--user">
-              <div class="aw-msg__bubble aw-msg__bubble--user">{{ msg.content }}</div>
+              <div class="aw-msg__bubble aw-msg__bubble--user">
+                <div v-if="msg.images && msg.images.length > 0" class="aw-msg__images">
+                  <img
+                    v-for="(img, idx) in msg.images"
+                    :key="idx"
+                    :src="img"
+                    alt="attachment"
+                    class="aw-msg__image"
+                  />
+                </div>
+                <span v-if="msg.content">{{ msg.content }}</span>
+              </div>
             </div>
 
             <!-- Assistant 消息 -->
@@ -244,8 +255,8 @@ watch(_scrollTrigger, () => {
   })
 })
 
-function onSend(text: string) {
-  sendMessage(text, { symbol: symbolInput.value || undefined })
+function onSend(text: string, images: string[] = []) {
+  sendMessage(text, { symbol: symbolInput.value || undefined, images: images.length > 0 ? images : undefined })
 }
 
 function onSymbolEnter() {
@@ -571,6 +582,26 @@ watch(
   max-width: 70%;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.aw-msg__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.aw-msg__image {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.aw-msg__image:hover {
+  transform: scale(1.03);
 }
 
 .aw-msg--assistant {
