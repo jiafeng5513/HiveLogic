@@ -42,8 +42,9 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import MarketTabs from './components/market-browser/MarketTabs.vue'
 import FilterBar from './components/market-browser/FilterBar.vue'
 import DataTable from './components/market-browser/DataTable.vue'
+import { getApiBase } from './service/serverConfig'
 
-const API_BASE = 'http://127.0.0.1:8100/api/v1/market'
+const API_BASE = getApiBase() + '/api/v1/market'
 
 // 市场 Tab 定义
 const marketTabs = ref([

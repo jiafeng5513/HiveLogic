@@ -630,21 +630,15 @@
 <script>
 import '@renderer/styles/layout.css'
 import { setupSidePanelWidth } from './composables/useSidePanelWidth'
+import { getApiBase } from './service/serverConfig'
 
 const API_BASE = '/api/v1/portfolio'
-
-function getBaseUrl() {
-  if (window.electronAPI) {
-    return window.electronAPI.getDsaConfig().then(cfg => `http://127.0.0.1:${cfg.port || 8100}`)
-  }
-  return Promise.resolve('http://127.0.0.1:8100')
-}
 
 export default {
   name: 'Portfolio',
   data() {
     return {
-      baseUrl: 'http://127.0.0.1:8100',
+      baseUrl: getApiBase(),
       // Tabs
       tabs: [
         { key: 'overview', label: '概览' },
@@ -724,12 +718,6 @@ export default {
     // 同步侧栏宽度并启用拖拽调整
     setupSidePanelWidth(this.$refs.sidePanel)
 
-    try {
-      const cfg = window.electronAPI ? await window.electronAPI.getDsaConfig() : {}
-      this.baseUrl = `http://127.0.0.1:${cfg.port || 8100}`
-    } catch {
-      this.baseUrl = 'http://127.0.0.1:8100'
-    }
     await this.checkService()
     await this.loadAccounts()
     await this.loadSnapshot()

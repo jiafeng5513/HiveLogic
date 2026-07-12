@@ -150,9 +150,10 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { getApiBase } from '../../service/serverConfig'
 
 const props = defineProps({
-  baseUrl: { type: String, default: 'http://127.0.0.1:8100' },
+  baseUrl: { type: String, default: getApiBase() },
 })
 
 // ==================== State ====================

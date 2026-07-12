@@ -229,6 +229,8 @@
           :risk-debate="agentStreamResult.riskDebate"
           :thinking="agentStreamResult.thinking"
           :mode="analysisMode"
+          :plan="agentStreamResult.plan"
+          :step-reasoning="agentStreamResult.stepReasoning"
         />
         <AnalysisRadar
           v-if="radarDimensions.length > 0 && !agentStreaming"
@@ -250,6 +252,7 @@ import '@renderer/styles/layout.css'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useSidePanelWidth } from './composables/useSidePanelWidth'
 import { useChatStream } from './composables/useChatStream'
+import { getApiBase } from './service/serverConfig'
 import MarkdownIt from 'markdown-it'
 
 import hljs from 'highlight.js/lib/core'
@@ -318,7 +321,6 @@ const taskList = ref([])
 const serviceStatus = ref('unknown') // unknown, connected, disconnected
 let searchTimer = null
 let eventSource = null
-let dsaPort = 8100
 
 // Agent 模式 & 流式分析状态
 const analysisMode = ref('deep') // 'quick' | 'deep'
@@ -395,9 +397,9 @@ const quickStocks = [
   { code: '601318', name: '中国平安' }
 ]
 
-// 获取 DSA 服务地址
+// 后端地址统一走 serverConfig（支持本地/远程模式切换），不再硬编码端口
 function getBaseUrl() {
-  return `http://127.0.0.1:${dsaPort}`
+  return getApiBase()
 }
 
 // 检查服务状态
@@ -827,12 +829,6 @@ function formatTime(isoStr) {
 let serviceCheckTimer = null
 
 onMounted(async () => {
-  // 从主进程获取 DSA 端口
-  if (window.electronAPI && window.electronAPI.getDsaConfig) {
-    const config = await window.electronAPI.getDsaConfig()
-    dsaPort = config.port || 8100
-  }
-
   // 监听来自标的浏览器的分析请求
   if (window.electronAPI?.onAnalyzeSymbol) {
     window.electronAPI.onAnalyzeSymbol((symbolInfo) => {
@@ -849,7 +845,6 @@ onMounted(async () => {
   // 监听 DSA 状态变化
   if (window.electronAPI && window.electronAPI.onDsaStatusChanged) {
     window.electronAPI.onDsaStatusChanged(async (data) => {
-      dsaPort = data.port || dsaPort
       if (data.status === 'running') {
         await checkService()
         if (serviceStatus.value === 'connected') {

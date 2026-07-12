@@ -1,0 +1,22 @@
+<Project>
+  <!--
+    Auto-imported by MSBuild (after the project body) for native modules rebuilt
+    under client/ via electron-builder/node-gyp (e.g. node-pty).
+
+    Two fixes for building against the Visual Studio 2026 (v145) toolset:
+    1. node-pty's generated vcxproj hard-codes <SpectreMitigation>Spectre</SpectreMitigation>,
+       which would require the optional "Spectre-mitigated libs" component. We turn it
+       off so the standard libs are used.
+    2. Ensure the MSVC toolset lib directory is on the linker search path so core
+       libs such as delayimp.lib (used by node's delay-load hook) resolve.
+  -->
+  <PropertyGroup>
+    <SpectreMitigation>false</SpectreMitigation>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(VCToolsInstallDir)' != ''">
+    <Link>
+      <AdditionalLibraryDirectories>$(VCToolsInstallDir)lib\$(Platform);%(Link.AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>

@@ -42,7 +42,7 @@
         </template>
       </div>
       <!-- 操作按钮 -->
-      <div class="side-panel-footer" v-if="activeCategory !== 'local' && activeCategory !== 'dsa_service'">
+      <div class="side-panel-footer" v-if="activeCategory !== 'local' && activeCategory !== 'server' && activeCategory !== 'dsa_service' && activeCategory !== 'admin'">
         <button class="panel-btn" @click="importConfig" :disabled="!dsaServerRunning || isSaving" title="从 .env 文件导入配置">导入</button>
         <button class="panel-btn" @click="exportConfig" :disabled="!dsaServerRunning || dsaItems.length === 0" title="导出当前配置为 .env 文件">导出</button>
         <button class="panel-btn" @click="resetDraft" :disabled="!hasDirty || isSaving">重置</button>
@@ -136,6 +136,121 @@
           </div>
         </template>
 
+        <!-- 服务端连接设置 -->
+        <template v-if="activeCategory === 'server'">
+          <div class="section-card">
+            <div class="section-title">服务端连接模式</div>
+            <div class="section-desc">选择内置本地后端或连接远程常驻服务端。</div>
+
+            <div class="field-item">
+              <label>连接模式</label>
+              <select v-model="serverConfig.mode" class="field-input">
+                <option value="local">本地内置（自动拉起后端进程）</option>
+                <option value="remote">远程服务端（连接 7×24 常驻后端）</option>
+              </select>
+              <div class="field-desc">本地模式由客户端自动管理后端进程；远程模式连接独立部署的服务端。</div>
+            </div>
+          </div>
+
+          <div class="section-card" v-if="serverConfig.mode === 'remote'">
+            <div class="section-title">远程服务端地址</div>
+            <div class="section-desc">填入远程服务端的 HTTP 地址（含端口）。</div>
+
+            <div class="field-item">
+              <label>服务端地址</label>
+              <div class="field-row">
+                <input type="text" v-model="serverConfig.remoteBaseUrl"
+                  placeholder="例如 http://192.168.50.7:8100"
+                  class="field-input flex-1" />
+                <button class="btn btn-browse" @click="testServerConnection" :disabled="serverTesting">
+                  {{ serverTesting ? '测试中...' : '测试连接' }}
+                </button>
+              </div>
+              <div class="field-desc" v-if="serverTestResult" :style="{ color: serverTestResult.success ? '#2ea043' : '#da3633' }">
+                {{ serverTestResult.message }}
+              </div>
+              <div class="field-desc" v-else>点击「测试连接」探测服务端 /api/health 是否可达。</div>
+            </div>
+
+            <div class="field-item">
+              <label>访问令牌（可选）</label>
+              <input type="password" v-model="serverConfig.token"
+                placeholder="预留，Phase 5 启用"
+                class="field-input" />
+              <div class="field-desc">远程服务端的访问令牌，当前内网阶段可留空。</div>
+            </div>
+          </div>
+
+          <div class="section-card" v-if="serverConfig.mode === 'local'">
+            <div class="section-title">本地模式</div>
+            <div class="section-desc">客户端启动时自动拉起内置后端进程，退出时自动停止。</div>
+            <div class="field-item">
+              <div class="field-desc">如需修改端口，请在「DSA 服务」页面配置。</div>
+            </div>
+          </div>
+
+          <div class="section-card">
+            <div class="field-item">
+              <button class="btn btn-primary" @click="saveServerConfig" :disabled="serverSaving">
+                {{ serverSaving ? '保存中...' : '保存并应用' }}
+              </button>
+              <div class="field-desc" v-if="serverSaved">已保存。切换模式后需重启客户端生效。</div>
+            </div>
+          </div>
+
+          <div class="section-card" v-if="dsaServerRunning">
+            <div class="section-title">客户端账号</div>
+            <div class="section-desc">订阅账号登录。启用后需登录才能访问数据接口。</div>
+
+            <div v-if="clientAuthLoading" class="field-item">
+              <div class="field-desc">正在检查客户端认证状态...</div>
+            </div>
+
+            <template v-else-if="!clientAuthEnabled">
+              <div class="field-item">
+                <div class="field-desc">客户端认证未启用。在 .env 中设置 <code>CLIENT_AUTH_ENABLED=true</code> 后重启服务即可开启。</div>
+              </div>
+            </template>
+
+            <template v-else-if="clientAccount">
+              <div class="field-item">
+                <label>当前账号</label>
+                <div class="kv-inline-row"><span class="kv-inline-label">邮箱</span><span class="kv-inline-value">{{ clientAccount.email }}</span></div>
+                <div class="kv-inline-row"><span class="kv-inline-label">显示名</span><span class="kv-inline-value">{{ clientAccount.display_name || '-' }}</span></div>
+                <div class="kv-inline-row"><span class="kv-inline-label">订阅等级</span><span class="kv-inline-value"><span :class="['tier-badge', tierBadgeClass(clientTier)]">{{ tierBadgeLabel(clientTier) }}</span></span></div>
+              </div>
+              <div class="field-item" v-if="clientUsage">
+                <label>用量统计（近30天）</label>
+                <div class="kv-inline-row"><span class="kv-inline-label">总请求</span><span class="kv-inline-value">{{ clientUsage.total_requests ?? 0 }}</span></div>
+                <div class="kv-inline-row"><span class="kv-inline-label">今日请求</span><span class="kv-inline-value">{{ clientUsage.today_requests ?? 0 }}</span></div>
+                <div class="kv-inline-row"><span class="kv-inline-label">Token 消耗</span><span class="kv-inline-value">{{ clientUsage.total_tokens ?? 0 }}</span></div>
+              </div>
+              <div class="field-item">
+                <button class="btn btn-secondary" @click="clientLogout" :disabled="clientLoggingOut">
+                  {{ clientLoggingOut ? '登出中...' : '退出登录' }}
+                </button>
+              </div>
+            </template>
+
+            <template v-else>
+              <div class="field-item">
+                <label>邮箱</label>
+                <input type="email" v-model="clientLoginEmail" class="field-input" placeholder="请输入邮箱" @keyup.enter="clientLogin" />
+              </div>
+              <div class="field-item">
+                <label>密码</label>
+                <input type="password" v-model="clientLoginPassword" class="field-input" placeholder="请输入密码" @keyup.enter="clientLogin" />
+              </div>
+              <div class="field-item">
+                <button class="btn btn-primary" @click="clientLogin" :disabled="clientLoggingIn || !clientLoginEmail || !clientLoginPassword">
+                  {{ clientLoggingIn ? '登录中...' : '登录' }}
+                </button>
+                <div class="field-desc" v-if="clientLoginError" style="color:#da3633;">{{ clientLoginError }}</div>
+              </div>
+            </template>
+          </div>
+        </template>
+
         <!-- DSA 服务设置 -->
         <template v-if="activeCategory === 'dsa_service'">
           <div class="section-card">
@@ -172,6 +287,11 @@
               <div class="field-desc">{{ statusDesc }}</div>
             </div>
           </div>
+        </template>
+
+        <!-- 管理面板 -->
+        <template v-else-if="activeCategory === 'admin'">
+          <AdminPanel />
         </template>
 
         <!-- DSA 后端配置分类（schema 驱动） -->
@@ -687,6 +807,8 @@ import Sortable from 'sortablejs'
 import '@renderer/styles/layout.css'
 import { useSidePanelWidth } from './composables/useSidePanelWidth'
 import CacheTimeline from './components/cache-timeline/CacheTimeline.vue'
+import { getApiBase } from './service/serverConfig'
+import AdminPanel from './components/AdminPanel.vue'
 
 const sidePanelRef = ref(null)
 useSidePanelWidth(sidePanelRef)
@@ -1175,6 +1297,29 @@ const dsaLocal = reactive({
   port: 8100,
 })
 
+// 服务端连接配置（Phase 1.4）
+const serverConfig = reactive({
+  mode: 'local',
+  remoteBaseUrl: '',
+  token: ''
+})
+const serverTesting = ref(false)
+const serverTestResult = ref(null)
+const serverSaving = ref(false)
+const serverSaved = ref(false)
+
+const CLIENT_TOKEN_KEY = 'hivelogic:clientToken'
+const clientAuthEnabled = ref(false)
+const clientAuthLoading = ref(false)
+const clientAccount = ref(null)
+const clientTier = ref('')
+const clientUsage = ref(null)
+const clientLoginEmail = ref('')
+const clientLoginPassword = ref('')
+const clientLoggingIn = ref(false)
+const clientLoggingOut = ref(false)
+const clientLoginError = ref('')
+
 // DSA 后端配置
 const isLoadingDsa = ref(false)
 const dsaLoadError = ref('')
@@ -1225,7 +1370,7 @@ const confirmDialog = reactive({
 // =============================
 // 计算属性
 // =============================
-const baseUrl = computed(() => `http://127.0.0.1:${dsaLocal.port || 8100}`)
+const baseUrl = computed(() => getApiBase())
 
 const statusInfo = computed(() => {
   const map = {
@@ -1364,10 +1509,17 @@ const categoryIconMap = {
   uncategorized: '📦',
 }
 
-const localCategories = computed(() => [
-  { key: 'local', icon: '⚙️', title: '本地设置', description: '工作区、主题与标签页配置。', count: 0 },
-  { key: 'dsa_service', icon: '🔌', title: 'DSA 服务', description: '后端服务连接与启停管理。', count: 0 },
-])
+const localCategories = computed(() => {
+  const cats = [
+    { key: 'local', icon: '⚙️', title: '本地设置', description: '工作区、主题与标签页配置。', count: 0 },
+    { key: 'server', icon: '🔗', title: '服务端连接', description: '本地内置或远程服务端地址。', count: 0 },
+    { key: 'dsa_service', icon: '🔌', title: 'DSA 服务', description: '后端服务连接与启停管理。', count: 0 },
+  ]
+  if (dsaServerRunning.value) {
+    cats.push({ key: 'admin', icon: '🛡️', title: '管理面板', description: '服务状态、客户端与缓存管理。', count: 0 })
+  }
+  return cats
+})
 
 const dsaCategories = computed(() => {
   if (!dsaServerRunning.value || dsaItems.value.length === 0) {
@@ -1524,6 +1676,162 @@ async function saveDsaLocal() {
   })
 }
 
+async function loadServerConfig() {
+  if (!window.electronAPI?.getServerConfig) return
+  const cfg = await window.electronAPI.getServerConfig()
+  serverConfig.mode = cfg.mode || 'local'
+  serverConfig.remoteBaseUrl = cfg.remoteBaseUrl || ''
+  serverConfig.token = cfg.token || ''
+  syncServerConfigToStorage()
+}
+
+async function saveServerConfig() {
+  if (!window.electronAPI?.setServerConfig) return
+  serverSaving.value = true
+  serverSaved.value = false
+  try {
+    await window.electronAPI.setServerConfig({
+      mode: serverConfig.mode,
+      remoteBaseUrl: serverConfig.remoteBaseUrl.trim(),
+      token: serverConfig.token
+    })
+    syncServerConfigToStorage()
+    serverSaved.value = true
+  } finally {
+    serverSaving.value = false
+  }
+}
+
+function syncServerConfigToStorage() {
+  const STORAGE_KEY = 'hivelogic:serverBaseUrl'
+  if (serverConfig.mode === 'remote' && serverConfig.remoteBaseUrl.trim()) {
+    localStorage.setItem(STORAGE_KEY, serverConfig.remoteBaseUrl.trim())
+  } else {
+    localStorage.removeItem(STORAGE_KEY)
+  }
+}
+
+async function testServerConnection() {
+  const url = serverConfig.remoteBaseUrl.trim()
+  if (!url) {
+    serverTestResult.value = { success: false, message: '请先填写服务端地址' }
+    return
+  }
+  serverTesting.value = true
+  serverTestResult.value = null
+  try {
+    const resp = await fetch(`${url.replace(/\/+$/, '')}/api/health`, { signal: AbortSignal.timeout(5000) })
+    if (resp.ok) {
+      serverTestResult.value = { success: true, message: `连接成功（HTTP ${resp.status}）` }
+    } else {
+      serverTestResult.value = { success: false, message: `服务端返回 HTTP ${resp.status}` }
+    }
+  } catch (e) {
+    serverTestResult.value = { success: false, message: `连接失败: ${e.message || e}` }
+  } finally {
+    serverTesting.value = false
+  }
+}
+
+function clientAuthHeaders() {
+  const token = localStorage.getItem(CLIENT_TOKEN_KEY)
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+async function loadClientAuthStatus() {
+  if (!dsaServerRunning.value) return
+  clientAuthLoading.value = true
+  try {
+    const resp = await fetch(`${baseUrl.value}/api/v1/client-auth/me`, {
+      headers: { ...clientAuthHeaders() },
+    })
+    if (resp.ok) {
+      const data = await resp.json()
+      clientAuthEnabled.value = true
+      clientAccount.value = data.account
+      clientTier.value = data.tier
+      clientUsage.value = data.usage
+    } else if (resp.status === 401) {
+      clientAuthEnabled.value = true
+      clientAccount.value = null
+      clientTier.value = ''
+      clientUsage.value = null
+      localStorage.removeItem(CLIENT_TOKEN_KEY)
+    } else {
+      const statusResp = await fetch(`${baseUrl.value}/api/v1/client-auth/status`)
+      if (statusResp.ok) {
+        const statusData = await statusResp.json()
+        clientAuthEnabled.value = !!statusData.client_auth_enabled
+      }
+    }
+  } catch {
+    clientAuthEnabled.value = false
+  } finally {
+    clientAuthLoading.value = false
+  }
+}
+
+async function clientLogin() {
+  if (!clientLoginEmail.value || !clientLoginPassword.value) return
+  clientLoggingIn.value = true
+  clientLoginError.value = ''
+  try {
+    const resp = await fetch(`${baseUrl.value}/api/v1/client-auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: clientLoginEmail.value,
+        password: clientLoginPassword.value,
+        deviceInfo: navigator.userAgent.slice(0, 255),
+      }),
+    })
+    const data = await resp.json()
+    if (!resp.ok) {
+      clientLoginError.value = data.message || data.error || '登录失败'
+      return
+    }
+    localStorage.setItem(CLIENT_TOKEN_KEY, data.token)
+    clientAccount.value = data.account
+    clientTier.value = data.tier
+    clientUsage.value = null
+    clientLoginPassword.value = ''
+    showToast('success', '登录成功')
+    await loadClientAuthStatus()
+  } catch (e) {
+    clientLoginError.value = e.message || '网络错误'
+  } finally {
+    clientLoggingIn.value = false
+  }
+}
+
+async function clientLogout() {
+  clientLoggingOut.value = true
+  try {
+    await fetch(`${baseUrl.value}/api/v1/client-auth/logout`, {
+      method: 'POST',
+      headers: { ...clientAuthHeaders() },
+    })
+  } catch {
+  } finally {
+    localStorage.removeItem(CLIENT_TOKEN_KEY)
+    clientAccount.value = null
+    clientTier.value = ''
+    clientUsage.value = null
+    clientLoggingOut.value = false
+    showToast('success', '已退出登录')
+  }
+}
+
+const TIER_LABELS = { free: '免费版', pro: '专业版', enterprise: '企业版' }
+function tierBadgeLabel(tier) {
+  return TIER_LABELS[tier] || tier || '-'
+}
+function tierBadgeClass(tier) {
+  if (tier === 'enterprise') return 'tier-enterprise'
+  if (tier === 'pro') return 'tier-pro'
+  return 'tier-free'
+}
+
 // =============================
 // DSA 服务管理
 // =============================
@@ -1559,6 +1867,7 @@ function updateStatusFromEvent(data) {
   if (data.status === 'running') {
     statusDesc.value = `服务运行在 ${baseUrl.value}`
     if (dsaItems.value.length === 0) loadDsaConfig()
+    loadClientAuthStatus()
   }
 }
 
@@ -2445,6 +2754,9 @@ onMounted(async () => {
   // 加载 DSA 本地配置
   await loadDsaLocal()
 
+  // 加载服务端连接配置
+  await loadServerConfig()
+
   // 加载 DSA 服务状态
   if (window.electronAPI?.getDsaStatus) {
     const info = await window.electronAPI.getDsaStatus()
@@ -2460,9 +2772,10 @@ onMounted(async () => {
     window.electronAPI.onDsaStatusChanged(updateStatusFromEvent)
   }
 
-  // 如果服务已在运行，加载后端配置
+  // 如果服务已在运行，加载后端配置与客户端认证状态
   if (dsaServerRunning.value) {
     await loadDsaConfig()
+    loadClientAuthStatus()
   }
 })
 
@@ -3215,5 +3528,48 @@ watch(activeCategory, (cat) => {
   padding: 1px 6px;
   border-radius: 3px;
   flex-shrink: 0;
+}
+
+/* 客户端账号区 */
+.kv-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 13px;
+}
+.kv-inline-label {
+  min-width: 80px;
+  color: #888;
+  flex-shrink: 0;
+}
+.kv-inline-value {
+  color: #ddd;
+}
+.tier-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.tier-free {
+  color: #999;
+  background: rgba(150, 150, 150, 0.2);
+}
+.tier-pro {
+  color: #4a9eff;
+  background: rgba(74, 158, 255, 0.15);
+}
+.tier-enterprise {
+  color: #d29922;
+  background: rgba(210, 153, 34, 0.15);
+}
+code {
+  background: #1a1a1a;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #d29922;
 }
 </style>

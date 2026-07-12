@@ -11,6 +11,8 @@
  * 3. 前端缓存层：避免重复请求
  */
 
+import { getApiBase } from './serverConfig'
+
 // ==================== 类型定义 ====================
 
 export interface MarketType {
@@ -61,7 +63,7 @@ export interface RealtimeQuote {
 
 // ==================== 后端 API 基础地址 ====================
 
-const API_BASE = 'http://127.0.0.1:8100/api/v1/market'
+const API_BASE = getApiBase() + '/api/v1/market'
 
 // ==================== 前端缓存 ====================
 

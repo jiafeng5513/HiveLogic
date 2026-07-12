@@ -4,13 +4,14 @@
  * ===================================
  *
  * 职责:
- * 1. 管理与后端 ws://127.0.0.1:8100/ws/market 的 WebSocket 连接
+ * 1. 管理与后端 /ws/market 的 WebSocket 连接（地址由 serverConfig 动态提供）
  * 2. 提供订阅/退订 API (quotes / depth 频道)
  * 3. 自动重连 + 心跳保活
  * 4. 回调分发: 各组件注册 listener 接收推送
  */
 
 import type { RealtimeQuote } from './marketDataService'
+import { getWsUrl } from './serverConfig'
 
 // ==================== 类型定义 ====================
 
@@ -33,7 +34,7 @@ interface Subscription {
 
 // ==================== WebSocket 客户端 ====================
 
-const WS_URL = 'ws://127.0.0.1:8100/ws/market'
+const WS_URL = getWsUrl()
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000]
 const HEARTBEAT_INTERVAL = 25000
 

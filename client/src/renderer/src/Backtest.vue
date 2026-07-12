@@ -415,6 +415,7 @@
 <script>
 import '@renderer/styles/layout.css'
 import { setupSidePanelWidth } from './composables/useSidePanelWidth'
+import { getApiBase } from './service/serverConfig'
 
 const API_BASE = '/api/v1/backtest'
 
@@ -422,7 +423,7 @@ export default {
   name: 'Backtest',
   data() {
     return {
-      baseUrl: 'http://127.0.0.1:8100',
+      baseUrl: getApiBase(),
       tabs: [
         { key: 'run', label: '运行回测' },
         { key: 'results', label: '回测结果' },
@@ -464,12 +465,6 @@ export default {
     // 同步侧栏宽度并启用拖拽调整
     setupSidePanelWidth(this.$refs.sidePanel)
 
-    try {
-      const cfg = window.electronAPI ? await window.electronAPI.getDsaConfig() : {}
-      this.baseUrl = `http://127.0.0.1:${cfg.port || 8100}`
-    } catch {
-      this.baseUrl = 'http://127.0.0.1:8100'
-    }
     await this.checkService()
   },
   methods: {

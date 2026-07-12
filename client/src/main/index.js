@@ -127,6 +127,30 @@ function getBackendPath() {
   return join(dirname(app.getPath('exe')), 'server')
 }
 
+// =====================
+// 服务端连接配置管理（Phase 1.2）
+// =====================
+const DEFAULT_SERVER_CONFIG = {
+  mode: 'local',          // 'local' | 'remote'
+  remoteBaseUrl: '',      // 远程服务端地址，如 http://192.168.50.7:8100
+  token: ''               // 访问令牌（Phase 5 启用，当前预留）
+}
+
+function getServerConfig() {
+  const config = readConfig()
+  return { ...DEFAULT_SERVER_CONFIG, ...(config.server || {}) }
+}
+
+function setServerConfig(serverConfig) {
+  const config = readConfig()
+  config.server = { ...DEFAULT_SERVER_CONFIG, ...(config.server || {}), ...serverConfig }
+  writeConfig(config)
+}
+
+function isLocalMode() {
+  return getServerConfig().mode === 'local'
+}
+
 // 生成 DSA 的 .env 文件（仅在不存在时创建，避免覆盖后端 API 已保存的配置）
 function writeDsaEnvFile(dsaPath) {
   const envPath = join(dsaPath, '.env')
@@ -1630,6 +1654,16 @@ ipcMain.handle('set-dsa-config', (event, dsaConfig) => {
   return { success: true }
 })
 
+// 服务端连接配置 IPC（Phase 1.2）
+ipcMain.handle('get-server-config', () => {
+  return getServerConfig()
+})
+
+ipcMain.handle('set-server-config', (event, serverConfig) => {
+  setServerConfig(serverConfig)
+  return { success: true }
+})
+
 ipcMain.handle('browse-python-path', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: '选择 Python 解释器',
@@ -1870,14 +1904,20 @@ app.whenReady().then(() => {
     ipcMain.emit('indicator:toggle-editor')
   })
 
-  // 自动拉起后端服务
-  startFastApiServer().then((result) => {
-    if (result.success) {
-      console.log('[FastAPI] 后端服务已自动启动')
-    } else {
-      console.warn('[FastAPI] 后端服务自动启动失败:', result.error)
-    }
-  })
+  // 自动拉起后端服务（仅本地模式）
+  if (isLocalMode()) {
+    startFastApiServer().then((result) => {
+      if (result.success) {
+        console.log('[FastAPI] 后端服务已自动启动')
+      } else {
+        console.warn('[FastAPI] 后端服务自动启动失败:', result.error)
+      }
+    })
+  } else {
+    fastApiStatus = 'stopped'
+    broadcastDsaStatus()
+    console.log('[Server] 远程模式，跳过本地后端启动')
+  }
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
@@ -1890,7 +1930,9 @@ app.whenReady().then(() => {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
-  stopFastApiServer()
+  if (isLocalMode()) {
+    stopFastApiServer()
+  }
   destroyIndicatorManager()
   if (process.platform !== 'darwin') {
     app.quit()
@@ -1899,10 +1941,11 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   globalShortcut.unregisterAll()
-  stopFastApiServer()
-  terminalManager.destroyAll()
-  // 兜底：按端口号清理可能的残留进程
-  killProcessOnPort(fastApiPort)
+  if (isLocalMode()) {
+    stopFastApiServer()
+    terminalManager.destroyAll()
+    killProcessOnPort(fastApiPort)
+  }
 })
 
 app.on('activate', () => {

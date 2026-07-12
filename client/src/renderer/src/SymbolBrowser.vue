@@ -41,8 +41,9 @@ import { ref, onMounted, onUnmounted, reactive, watch } from 'vue'
 import SymbolList from './components/symbol-browser/SymbolList.vue'
 import SymbolContextMenu from './components/symbol-browser/SymbolContextMenu.vue'
 import { realtimeWS } from './service/realtimeWSClient'
+import { getApiBase } from './service/serverConfig'
 
-const API_BASE = 'http://127.0.0.1:8100/api/v1/market'
+const API_BASE = getApiBase() + '/api/v1/market'
 
 // 状态
 const loading = ref(false)

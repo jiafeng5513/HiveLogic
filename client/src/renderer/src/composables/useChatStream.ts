@@ -7,7 +7,7 @@
 
 import { ref, readonly } from 'vue'
 import { streamChat, type ChatRequest, type SSEEvent, type StreamController } from '../service/chatService'
-import type { ChatMode, StageInfo, ToolCallInfo, DebateInfo, RiskDebateInfo, DashboardData } from '../service/chatService'
+import type { ChatMode, StageInfo, ToolCallInfo, DebateInfo, RiskDebateInfo, DashboardData, InvestigationPlan, StepReasoning } from '../service/chatService'
 
 export type ChatStreamState =
   | 'idle'
@@ -28,6 +28,8 @@ export interface StreamResult {
   debate: DebateInfo | null
   riskDebate: RiskDebateInfo | null
   dashboard: DashboardData | null
+  plan: InvestigationPlan | null
+  stepReasoning: StepReasoning[]
 }
 
 export function useChatStream() {
@@ -40,7 +42,9 @@ export function useChatStream() {
     stages: [],
     debate: null,
     riskDebate: null,
-    dashboard: null
+    dashboard: null,
+    plan: null,
+    stepReasoning: []
   })
   const error = ref<string | null>(null)
 
@@ -55,7 +59,9 @@ export function useChatStream() {
       stages: [],
       debate: null,
       riskDebate: null,
-      dashboard: null
+      dashboard: null,
+      plan: null,
+      stepReasoning: []
     }
     error.value = null
   }
@@ -143,6 +149,18 @@ export function useChatStream() {
           content: event.data.content as Record<string, string>,
           status: event.data.status as 'running' | 'completed'
         }
+        break
+
+      case 'plan_generated':
+        result.value.plan = event.data.plan as InvestigationPlan
+        break
+
+      case 'step_reasoning':
+        result.value.stepReasoning.push({
+          step: event.data.step as number,
+          phase: (event.data.phase as string) || 'execution',
+          content: event.data.content as string
+        })
         break
 
       case 'generating':

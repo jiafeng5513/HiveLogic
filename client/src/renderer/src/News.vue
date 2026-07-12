@@ -42,15 +42,14 @@ import NewsTimeline from './components/news/NewsTimeline.vue'
 import NewsDetail from './components/news/NewsDetail.vue'
 import '@renderer/styles/layout.css'
 import { useSidePanelWidth } from './composables/useSidePanelWidth'
+import { getApiBase } from './service/serverConfig'
 
 const sidePanelRef = ref(null)
 useSidePanelWidth(sidePanelRef)
 
-// DSA 端口
-let dsaPort = 8100
-
+// 后端地址统一走 serverConfig（支持本地/远程模式切换），不再硬编码端口
 function getBaseUrl() {
-  return `http://127.0.0.1:${dsaPort}`
+  return getApiBase()
 }
 
 // 状态
@@ -189,19 +188,6 @@ watch(
 
 // 初始化
 onMounted(async () => {
-  // 从主进程获取 DSA 端口
-  if (window.electronAPI && window.electronAPI.getDsaConfig) {
-    const config = await window.electronAPI.getDsaConfig()
-    dsaPort = config.port || 8100
-  }
-
-  // 监听 DSA 状态变化
-  if (window.electronAPI && window.electronAPI.onDsaStatusChanged) {
-    window.electronAPI.onDsaStatusChanged(async (data) => {
-      dsaPort = data.port || dsaPort
-    })
-  }
-
   await fetchTimeline()
 })
 </script>

@@ -115,6 +115,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onDsaStatusChanged: (callback) =>
     ipcRenderer.on('dsa-status-changed', (event, data) => callback(data)),
 
+  getServerConfig: () => ipcRenderer.invoke('get-server-config'),
+  setServerConfig: (config) => ipcRenderer.invoke('set-server-config', config),
+
   // 后端进度信息（状态栏用）
   onBackendProgress: (callback) =>
     ipcRenderer.on('backend-progress', (event, data) => callback(data)),

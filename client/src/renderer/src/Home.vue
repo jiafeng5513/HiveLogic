@@ -31,8 +31,9 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import IndexCard from './components/home/IndexCard.vue'
+import { getApiBase } from './service/serverConfig'
 
-const API_BASE = 'http://127.0.0.1:8100/api/v1/market'
+const API_BASE = getApiBase() + '/api/v1/market'
 
 const indices = ref([
   { symbol: '000001.SH', name: '上证综指', price: null, change: null, change_percent: null, sparkline: null },
