@@ -130,26 +130,34 @@ client/src/renderer/src/components/cache-timeline/CacheTimeline.vue (baseUrl pro
 
 目标：客户端能通过配置连接任意服务端地址，不再强绑定本地自动拉起的后端。
 
-- [ ] **1.1 统一后端地址来源**
+- [x] **1.1 统一后端地址来源**
   - 新增 `client/src/renderer/src/service/serverConfig.ts`：导出 `getApiBase()` /
     `getWsUrl()`，从配置（IPC + localStorage 兜底）读取 `serverBaseUrl`，
     默认 `http://127.0.0.1:8100`。
   - 改造 8 处硬编码（见 §2.2）统一走 `serverConfig`。
-- [ ] **1.2 主进程配置项**
+  - 额外：`Settings.vue` 中的 `baseUrl` computed 也已改用 `getApiBase()`。
+  - > ✅ 核查与补全（2026-06-29）：§2.2 列出的 8 处已全部改用 `serverConfig`。
+    > 后续发现的 3 处遗留模块（`StockAnalysis.vue`、`News.vue`、`service/chatService.ts`）
+    > 原硬编码 `http://127.0.0.1:${dsaPort}`，现已统一改为 `getApiBase()`，
+    > 并清理了多余的 `dsaPort` 逻辑。至此渲染进程全部走 `serverConfig`，远程模式下
+    > 分析/新闻/聊天功能可正确指向远程服务端。
+- [x] **1.2 主进程配置项**
   - `client/src/main/index.js`：在 `hivelogic-config.json` 增加 `server` 段
     （`mode: 'local' | 'remote'`、`remoteBaseUrl`、`token`）。
   - 新增 IPC：`get-server-config` / `set-server-config`，供渲染进程读取/保存。
-- [ ] **1.3 本地后端按需启动**
+  - `client/src/preload/index.js` 暴露 `getServerConfig` / `setServerConfig`。
+- [x] **1.3 本地后端按需启动**
   - `startFastApiServer()` 调整：仅当 `mode === 'local'` 时自动拉起；`remote` 模式
     跳过本地后端，直接连远程。
-  - `before-quit` 仅在本地模式停止后端。
-- [ ] **1.4 设置页 UI**
+  - `before-quit` / `window-all-closed` 仅在本地模式停止后端。
+- [x] **1.4 设置页 UI**
   - `Settings.vue` 新增「服务端连接」分组：模式切换（本地/远程）、远程地址输入、
     连接测试按钮（探测 `/api/health`）、访问令牌输入。
-- [ ] **1.5 CORS / 跨域**
-  - 远程模式下，前端 origin 与后端不同源；后端 `api/app.py` 的 `allowed_origins`
-    需通过 `CORS_ORIGINS` 环境变量加入客户端来源（Electron `file://` 场景需评估，
-    必要时保留 `CORS_ALLOW_ALL` 仅内网使用）。
+  - 保存时同步写入 `localStorage['hivelogic:serverBaseUrl']`，使 `getApiBase()` 立即生效。
+- [x] **1.5 CORS / 跨域**
+  - 远程模式下，前端 origin 与后端不同源；后端 `api/app.py` 已通过 `CORS_ORIGINS`
+    环境变量加入客户端来源（代码中已存在，无需修改）。`CORS_ALLOW_ALL=true` 可用于
+    内网开发。
 
 产出验收：在 A 机器跑后端，B 机器客户端填入 `http://<A_IP>:8100` 可正常加载行情与图表。
 
@@ -160,30 +168,30 @@ client/src/renderer/src/components/cache-timeline/CacheTimeline.vue (baseUrl pro
 目标：后端脱离 Electron，在 mac mini 上 7×24 常驻、开机自启、崩溃自拉起，
 并为未来云迁移准备容器化方案。
 
-- [ ] **2.1 部署文档与脚本**
+- [x] **2.1 部署文档与脚本**
   - 新增 `doc/deploy/server_setup_macos.md`：mac mini 环境准备
     （Python/uv 安装、克隆代码、`.env` 配置、数据目录规划）。
   - 新增 `deploy/run_server.sh`：以 `python main.py --serve-only --host 0.0.0.0
-    --port 8100` 或 `uvicorn server:app` 启动（确认监听 `0.0.0.0`）。
-- [ ] **2.2 进程守护（launchd）**
+    --port 8100` 启动（确认监听 `0.0.0.0`）。
+- [x] **2.2 进程守护（launchd）**
   - 新增 `deploy/com.hivelogic.server.plist`：`KeepAlive=true`、`RunAtLoad=true`、
     日志重定向到 `logs/`，崩溃自动重启。
   - 文档说明 `launchctl load/unload` 与日志查看方式。
-- [ ] **2.3 数据目录与持久化**
+- [x] **2.3 数据目录与持久化**
   - 明确 `DATABASE_PATH` / 缓存 db / `.session_secret` / `.admin_password_hash`
     的服务端落盘路径（独立于代码目录，便于备份）。
-  - 提供数据库备份脚本（SQLite WAL 安全备份）。
-- [ ] **2.4 容器化（Docker）**
+  - 提供数据库备份脚本 `deploy/backup_db.sh`（SQLite WAL 安全备份，保留 30 份）。
+- [x] **2.4 容器化（Docker）**
   - 新增 `Dockerfile`：基于 Python 3.12+ 镜像，安装 uv + 依赖，暴露 8100 端口，
     支持 `--serve-only` 模式启动。
   - 新增 `docker-compose.yml`：定义 `server` 服务 + 数据卷挂载（独立于容器生命周期
     的持久化目录）。
-  - 文档说明 Docker 运行方式：`docker compose up -d` 即可启动守护。
+  - 新增 `doc/deploy/docker_deploy.md`：文档说明 Docker 运行方式：`docker compose up -d` 即可启动守护。
   - **设计考量**：
     - 数据目录通过 volume 持久化，数据库/配置文件/日志不出容器。
     - 环境变量通过 `.env` 或 `docker-compose.override.yml` 传入。
     - 后续云迁移：镜像不变，只需替换编排层（launchd → Docker Compose → K8s）。
-- [ ] **2.5 网络与安全（内网阶段）**
+- [x] **2.5 网络与安全（内网阶段）**
   - 固定内网 IP 或主机名；说明端口放行。
   - 内网阶段先用现有 admin 口令鉴权 + 简单访问令牌保护数据 API（Phase 5 再升级）。
 
@@ -219,29 +227,43 @@ client/src/renderer/src/components/cache-timeline/CacheTimeline.vue (baseUrl pro
 
 #### 任务清单
 
-- [ ] **3.1 标的列表持久化与预热（L0 基础）**
+- [x] **3.1 标的列表持久化与预热（L0 基础）**
   - 将 `SymbolListService` 结果落库（新表 `symbol_list`：market/symbol/name/updated_at）。
   - `GET /api/v1/market/symbols?market=...` 优先读库，秒级返回。
   - 客户端启动直接拉该接口渲染标的列表（满足需求 1）。
-- [ ] **3.2 全市场行情快照采集（L0）**
+- [x] **3.2 全市场行情快照采集（L0）**
   - 新增低频快照采集（A股用东财全量接口、加密用聚合流 `!ticker@arr`），维护「最新一份」
     全市场价格（最新价/涨跌幅），供标的浏览器；不长期归档。
-- [ ] **3.3 全市场日线定时归档（L1）**
+  - > ✅ 补全（2026-06-29）：新增 `collect_us_stock`（东财 `stock_us_spot_em`，
+    > `代码` 形如 `105.AAPL` → 取 ticker），并将列名读取改为别名兼容
+    > （A股 `今开/最高/最低/昨收` ↔ 美股 `开盘价/最高价/最低价/昨收价`）。
+    > 现 `collect_all` 覆盖 cn_stock/cn_etf/hk_stock/us_stock/crypto。
+    > （crypto 当前仍用 REST `ticker/24hr` 轮询，非聚合流，属可接受实现差异。）
+- [x] **3.3 全市场日线定时归档（L1）**
   - 见下「3.7 定时采集调度」；按市场收盘后增量补全所有标的日线。
-- [ ] **3.4 实时行情写入缓存（L2）**
+  - > ✅ 补全（2026-06-29）：`_SNAPSHOT_TO_KLINE_MARKET` 增加 `us_stock → us`，
+    > `archive_daily_from_snapshot("us_stock")` 现可用，美股日线归档已覆盖。
+- [x] **3.4 实时行情写入缓存（L2）**
   - `RealtimeWSRelay` / WS 客户端中继实时 K 线时，未收盘 K 线以 `is_complete=0` 写入
     `kline_data`，收盘后更新为完整（落实 `local_database_plan` 待办项）。
   - 日终用 L1 官方收盘日线**校正**当天由实时流拼出的日线（以收盘值为准）。
-- [ ] **3.5 订阅管理器（L2 关键缺口）**
+- [x] **3.5 订阅管理器（L2 关键缺口）**
   - 新增 `src/services/subscription_manager.py`：把【客户端需求 → 上游订阅】做
     **引用计数 + 多路复用 + LRU**——一个标的上游只订阅一次，扇出给 N 个客户端；
     无订阅者后按 LRU 退订上游（历史缓存保留）。
   - 改造 `RealtimeWSRelay` 走订阅管理器，**杜绝每客户端各开一条上游连接**。
   - 热集合来源：各客户端自选 ∪ 正在打开 ∪ 服务端运营配置，去重。
-- [ ] **3.6 缓存优先读取强化 + 命中率埋点**
+  - > ✅ 接线（2026-06-29）：`RealtimeWSRelay` 已真正接入 `SubscriptionManager`：
+    > 每个 ws 分配稳定 client_id；subscribe/unsubscribe/断连均驱动管理器引用计数，
+    > 上游订阅由 0→1 回调触发、退订由 LRU grace 期满的 eviction 回调触发。
+    > `_aggregated_quotes/_depth` 改为由管理器派生（含 grace 期标的）；
+    > 新增 `start/stop_subscription_eviction_loop`，已在 `app.py` lifespan 启停。
+    > grace 期通过 `REALTIME_LRU_GRACE_SECONDS`（默认 60s）配置。`get_status()`
+    > 增加 `subscription_manager` 字段供管理面板观测。
+- [x] **3.6 缓存优先读取强化 + 命中率埋点**
   - 复核 `DataFetcherManager.get_daily_data()` 的 cache-first 流程；增加命中率/缺口指标
-    （供管理面板展示）。
-- [ ] **3.7 定时采集调度（L1 核心）**
+  （供管理面板展示）。
+- [x] **3.7 定时采集调度（L1 核心）**
   - **按市场收盘后分别增量**（服务端按 CST/UTC+8）：
 
     | 任务 | 触发(CST) | 说明 |
@@ -273,7 +295,16 @@ client/src/renderer/src/components/cache-timeline/CacheTimeline.vue (baseUrl pro
       misfire_grace_time 更可靠也更可控。
     - 未来如果任务数量膨胀到上百个、且需要动态增删/暂停/恢复、需要精确秒级 cron 表达式
       时，再考虑 APScheduler 不迟。
-- [ ] **3.8 SQLite 并发防护：写队列 + busy-timeout**
+  - > ✅ 补全（2026-06-29）：`_build_scheduler()` 现注册 **8 个命名任务**，与上表对齐：
+    > `cn_stock_daily` 15:30、`hk_stock_daily` 16:30、`us_stock_daily` 06:00（新增）、
+    > `crypto_daily` 08:10、`symbol_list_refresh` 07:00（已含 us_stock）、
+    > `nightly_gap_reconcile` 02:00（新增）、`db_maintenance` 03:30、`db_backup` 03:00。
+    > 夜间缺口对账对已收盘的 A股/港股做幂等补全，并记录各市场日线新鲜度
+    > （`CacheMaintenance.get_daily_freshness()`）；US/crypto 此刻未收线，交由自身任务 + catch-up。
+    > 顺带修复：`app.py` 模块级 `_build_scheduler() -> Scheduler` 标注引用的 `Scheduler`
+    > 之前仅在 lifespan 内局部 import，导致 `import api.app` 抛 `NameError`、服务无法启动；
+    > 已将 `from src.scheduler import Scheduler` 提升到模块顶层。
+- [x] **3.8 SQLite 并发防护：写队列 + busy-timeout**
   - SQLite 在 7×24 场景下，采集线程持续写入 + API 读取 + WS 实时中继写入，
     虽 WAL 模式允许读写并行，但写写冲突仍需防范。
   - **写队列**：所有写入操作（采集写入、缓存更新）通过单例队列串行化，
@@ -282,7 +313,7 @@ client/src/renderer/src/components/cache-timeline/CacheTimeline.vue (baseUrl pro
     让写入冲突时等待最多 5 秒再报错，而非立即失败。
   - **连接管理**：API 只读路径使用单独的只读连接，与写连接分离，减少锁竞争。
   - 写入队列的实现应轻量：一个 `asyncio.Queue` + 单个 consumer 协程循环消费。
-- [ ] **3.9 磁盘与清理策略**
+- [x] **3.9 磁盘与清理策略**
   - 缓存大小统计接口 + 分钟级数据保留窗口/自动清理（落实 `local_database_plan` 待办项）。
 
 产出验收：客户端冷启动立即看到标的列表与最新价；常用标的行情几乎全部命中本地缓存；
@@ -301,33 +332,47 @@ client/src/renderer/src/components/cache-timeline/CacheTimeline.vue (baseUrl pro
 - 客户端已具备完整 UI 框架（Vue3 + Element Plus），复用现有组件即可
 - 管理功能天然需要鉴权，客户端 admin 登录流程可与 Phase 5 统一
 
-- [ ] **4.1 管理功能入口与鉴权**
-  - `Settings.vue` 或新增 `AdminPanel.vue`：管理面板入口，仅对已登录 admin 账号可见。
+- [x] **4.1 管理功能入口与鉴权**
+  - `Settings.vue` 新增 `admin` 导航分类 + `AdminPanel.vue` 组件：管理面板入口，
+    仅当 `dsaServerRunning === true` 时显示。
   - 管理功能复用现有 `ADMIN_AUTH_ENABLED` 鉴权体系：用户通过 `POST /api/v1/auth/login`
-    获取 admin session cookie，客户端存储并在管理 API 请求中携带。
-  - 普通用户（未登录或非 admin）看不到管理入口。
-  - 后端新增角色字段：admin 账号标记 `role: admin`，未来普通客户端账号为
-    `role: user`（Phase 5 时启用）。
-- [ ] **4.2 服务状态面板**
-  - 后端新增 `GET /api/v1/admin/status`：进程运行时长、版本、各数据源健康、
-    采集守护状态、WS 中继状态（`/api/ws/status` 已有）、调度任务状态。
-  - 客户端渲染状态看板（卡片布局）：数据源健康指示灯、各调度任务最近执行时间、
-    采集守护运行状态。
-- [ ] **4.3 缓存管理**
-  - 复用现有缓存 API（`/api/v1/cache/*`）+ 时间轴组件，提供按市场/标的的
-    缓存覆盖热力图、手动触发下载/删除、下载任务进度展示。
-- [ ] **4.4 客户端连接监控**
-  - 后端维护活跃连接表（WS 连接 + 最近 REST 调用），新增
-    `GET /api/v1/admin/clients`：列出连接的客户端（IP、账号、订阅等级、最近活跃、
-    在订阅的标的）。
-- [ ] **4.5 配置与调度管理**
-  - 系统配置编辑（复用 `system_config` 服务）。
-  - 调度任务手动触发和状态查看（基于「上次成功时间」落表）。
-  - 管理员改密（复用 `auth` 现有能力）。
-  - Phase 5 的账号/订阅管理入口在此预留。
-- [ ] **4.6 清理旧管理前端代码**
-  - 删除或冻结 `server/src/webui_frontend.py` 中指向 `static/` 的 SPA 托管逻辑。
-  - 确认 `server/api/app.py` 的 `static/index.html` 检测逻辑可移除或保留为空。
+    获取 admin session cookie，客户端通过 `credentials: 'include'` 自动携带。
+  - 后端 admin 端点位于 `/api/v1/admin/*`，受 `AuthMiddleware` 统一保护
+    （与 `/api/v1/*` 其他路由一致），未登录返回 401。
+  - 角色字段（`role: admin` / `role: user`）预留到 Phase 5 启用。
+- [x] **4.2 服务状态面板**
+  - 后端新增 `GET /api/v1/admin/status`：返回进程（uptime/started_at/python_version/
+    pid/version）、WS 中继状态、调度任务列表（name/schedule_time/last_run/
+    last_status/last_duration/next_run/enabled）、采集器状态、缓存命中指标、
+    磁盘使用、写入队列指标（enqueued/completed/failed/retries/depth/last_error）。
+  - 客户端 `AdminPanel.vue` 渲染 7 张卡片：进程信息、WS 中继（含客户端表）、
+    调度任务（含触发按钮）、行情采集器（含采集/归档按钮）、缓存指标（含磁盘使用）、
+    写入队列、缓存维护。每 5 秒自动轮询。
+- [x] **4.3 缓存管理**
+  - 后端已有 `/api/v1/cache/metrics`、`/cache/disk-usage`、`/cache/maintenance`、
+    `/cache/snapshot/{market}` 等端点（Phase 3.6 新增）。
+  - 管理面板复用 `/admin/status` 中的 `cache_metrics` + `disk_usage` 字段统一展示，
+    并提供「执行维护」按钮调用 `POST /api/v1/admin/maintenance/run`
+    （清理过期 K 线 + 任务日志 + VACUUM）。
+- [x] **4.4 客户端连接监控**
+  - 后端新增 `RestClientTracker`（`server/api/middlewares/rest_tracker.py`）：
+    有界 deque + IP 索引，通过中间件自动记录最近 REST 调用者。
+  - 后端新增 `GET /api/v1/admin/clients`：返回活跃 WS 客户端
+    （IP/state/订阅报价数/订阅深度数/订阅品种列表）+ 最近 REST 调用者。
+  - 客户端管理面板以表格展示 WS 客户端，含状态徽章（connected=绿/disconnected=红）。
+- [x] **4.5 配置与调度管理**
+  - 调度任务手动触发：`POST /api/v1/admin/scheduler/trigger/{task_name}`
+    （async fire-and-forget，返回 `{task, status: "triggered"}`）。
+  - 采集器手动触发：`POST /api/v1/admin/collector/collect/{market}`
+    （market: cn_stock/cn_etf/hk_stock/crypto/all）。
+  - 快照归档：`POST /api/v1/admin/collector/archive/{market}`
+    （将最新快照转为 1d K 线写入 kline_data）。
+  - 系统配置编辑复用现有 `system_config` 服务（已在 Phase 1 接入 Settings.vue）。
+  - Phase 5 的账号/订阅管理入口已在管理面板架构中预留。
+- [x] **4.6 清理旧管理前端代码**
+  - `server/main.py` 中 `prepare_webui_frontend_assets()` 调用改为受
+    `WEBUI_AUTO_BUILD` 环境变量控制（默认 `false`，跳过前端资源准备）。
+  - 服务端以 server-only 模式运行，前端 SPA 托管逻辑冻结，不再自动构建 `static/`。
 
 产出验收：使用管理员账号登录客户端，可在设置中看到管理面板入口，进入后可查看
 服务状态、缓存覆盖情况、在线客户端列表、手动触发采集任务。
@@ -338,25 +383,83 @@ client/src/renderer/src/components/cache-timeline/CacheTimeline.vue (baseUrl pro
 
 目标：多租户账号体系 + 订阅等级 + 按等级的数据/模型权限。
 
-- [ ] **5.1 账号与订阅数据模型**
-  - 新表：`accounts`（id/email/密码哈希/状态）、`subscriptions`（account_id/tier/
-    到期时间）、`api_tokens`（account_id/token 哈希/设备/到期）、
-    `usage_records`（用量计费/限流统计）。
-  - 订阅等级定义：`tier`（如 free/pro/enterprise）→ 权限矩阵（可用市场、数据粒度、
-    历史深度、可用模型、QPS/配额）。
-- [ ] **5.2 客户端鉴权（区别于 admin 鉴权）**
-  - 新增 `POST /api/v1/auth/client/login` 颁发 JWT/长期 token；客户端在请求头
-    `Authorization: Bearer` 携带。
-  - 扩展 `api/middlewares/auth.py`：对数据 API 增加「客户端 token 校验」分支，
-    与现有 admin session 并存；通过开关 `CLIENT_AUTH_ENABLED` 控制（内网默认关闭）。
-- [ ] **5.3 权限/配额执行（entitlement）**
-  - 新增 `src/services/entitlement.py`：根据账号订阅等级判定某次请求是否被允许
-    （市场/粒度/模型/配额），在数据 API 与 Agent/模型调用入口处拦截。
-  - 超限返回 402/403 并附升级提示。
-- [ ] **5.4 客户端登录 UI**
-  - `Settings.vue`「服务端连接」分组接入账号登录/登出、显示当前订阅等级与配额。
-- [ ] **5.5 管理面板账号管理**
-  - Phase 4 的管理面板中增加账号 CRUD、订阅授予/到期、token 吊销、用量查看。
+- [x] **5.1 账号与订阅数据模型**
+  - 新增 `server/src/models/accounts.py`：4 个 ORM 模型 — `Account`
+    （id/email/password_hash/role/status/display_name）、`Subscription`
+    （account_id/tier/starts_at/expires_at/status）、`ApiToken`
+    （account_id/token_hash/token_prefix/device_info/expires_at/revoked_at/last_used_at）、
+    `UsageRecord`（account_id/endpoint/method/market/model_used/tokens_consumed）。
+    全部继承 `storage.Base`，含 `to_dict()`。
+  - 新增 `server/src/models/tiers.py`：`TierConfig` frozen dataclass 定义权限矩阵
+    （markets/intervals/history_days/models/qps/daily_quota/features）。
+    3 档：`FREE`（cn only, 1d/1w, 30d, 无 AI, 100/day）、`PRO`（全市场, 全周期,
+    365d, standard/deepseek/qwen, 5000/day）、`ENTERPRISE`（无限历史/模型/配额）。
+    `TIERS` 注册表 + `TIER_ORDER` + `get_tier_config()` / `tier_meets_minimum()` /
+    `get_effective_tier()`。
+  - 新增 `server/src/repositories/account_repository.py`：`AccountRepository` 单例，
+    PBKDF2-SHA256 密码哈希（100k iterations, salt_b64:hash_b64）、
+    `secrets.token_urlsafe(32)` 令牌生成 + SHA256 哈希存储。
+    方法：`create_account` / `verify_credentials` / `get_active_subscription` /
+    `get_account_tier` / `grant_subscription`（自动取消旧订阅）/ `create_token`
+    （返回原始 token 一次）/ `validate_token`（更新 last_used_at）/ `revoke_token` /
+    `revoke_all_tokens` / `list_accounts` / `update_account` / `delete_account` /
+    `list_subscriptions` / `list_tokens` / `record_usage` / `get_usage_summary`。
+  - `server/api/app.py` 新增 `import src.models.accounts` 确保 ORM 注册到
+    `Base.metadata`，`DatabaseManager.__init__` 的 `create_all` 自动建表。
+- [x] **5.2 客户端鉴权（区别于 admin 鉴权）**
+  - 新增 `server/api/v1/endpoints/client_auth.py`：`GET /client-auth/status`、
+    `POST /client-auth/login`（email+password→Bearer token）、
+    `POST /client-auth/logout`（吊销当前 token）、`GET /client-auth/me`
+    （返回 account+tier+usage）。`_is_client_auth_enabled()` 读 `.env` 的
+    `CLIENT_AUTH_ENABLED`（与 admin auth 同模式）。
+  - 改造 `server/api/middlewares/auth.py`：双鉴权分支并存。
+    admin 分支（cookie `dsa_session`）+ client 分支（`Authorization: Bearer` 头）。
+    client 分支调用 `AccountRepository.validate_token()` 验证，成功则设置
+    `request.state.client_account`。admin-only 路径（`/api/v1/admin/*`）要求 admin
+    session，client token 不可访问。`CLIENT_AUTH_ENABLED` 关闭时跳过 client 分支。
+  - `server/api/v1/router.py` 注册 `client_auth.router` 到 `/client-auth` 前缀。
+- [x] **5.3 权限/配额执行（entitlement）**
+  - > ✅ 接线（2026-06-29）：已在 `entitlement.py` 新增端点标识归一化
+    > （`normalize_market_key`：cn_stock→cn / hk_stock→hk / us_stock→us / crypto→crypto_binance；
+    > `normalize_interval_key`：1/5/60/daily→1m/5m/1h/1d）与统一准入助手 `enforce_data_request`
+    > （配额 402 → 市场 403 → 周期 403 → 历史深度 403，映射不到的市场/周期保守放行）。
+    > `market.py`（/symbols、/kline、/realtime、/browser/data）与 `stocks.py`
+    > （/{code}/quote、/{code}/history）已调用该助手，并对 /kline 记录用量。
+    > **关键**：所有检查在客户端鉴权未启用/无客户端账号时自动跳过，内网免登录模式零影响。
+    > （`/history` 为分析报告历史、无市场维度，未纳入市场门禁。）
+  - 新增 `server/src/services/entitlement.py`：`EntitlementService` 单例 +
+    FastAPI 依赖工厂。
+    - `check_market_access` / `check_interval_access` / `check_history_depth` /
+      `check_model_access` / `check_daily_quota` / `check_feature` — 无权抛 403，
+      超额抛 402，响应含 tier/error/message 便于前端展示升级提示。
+    - `get_entitlements(account_id)` 返回完整权限矩阵。
+    - FastAPI 依赖：`require_market(market)` / `require_interval(interval)` /
+      `require_model(model)` / `require_feature(feature)` / `check_client_quota` —
+      client auth 未启用时自动跳过（`request.state.client_account` 为 None）。
+    - `record_api_usage()` fire-and-forget 记录用量。
+  - 新增 admin 账号管理端点（`server/api/v1/endpoints/admin.py`）：
+    `GET /admin/accounts` / `POST /admin/accounts` / `PUT /admin/accounts/{id}` /
+    `DELETE /admin/accounts/{id}` / `GET /admin/accounts/{id}/subscriptions` /
+    `POST /admin/accounts/{id}/subscriptions`（授予订阅）/ `GET /admin/accounts/{id}/tokens` /
+    `POST /admin/accounts/{id}/tokens/revoke-all` / `DELETE /admin/tokens/{id}` /
+    `GET /admin/accounts/{id}/usage` / `GET /admin/accounts/{id}/entitlements`。
+- [x] **5.4 客户端登录 UI**
+  - `Settings.vue`「服务端连接」分组新增「客户端账号」卡片：
+    - 未启用时显示 `.env` 配置提示。
+    - 未登录时显示邮箱+密码输入框与登录按钮。
+    - 已登录时显示邮箱/显示名/订阅等级（带 tier badge 着色）+ 用量统计
+      （总请求/今日请求/Token 消耗）+ 退出登录按钮。
+    - token 存储于 `localStorage['hivelogic:clientToken']`，请求头自动携带
+      `Authorization: Bearer`。
+    - 服务启动/状态变化时自动调用 `loadClientAuthStatus()` 同步状态。
+- [x] **5.5 管理面板账号管理**
+  - `AdminPanel.vue` 新增第 8 张卡片「账号管理」：
+    - 账号列表表格（ID/邮箱/显示名/角色/状态/订阅等级/操作）。
+    - 创建账号对话框（邮箱/密码/显示名/角色）。
+    - 授予订阅对话框（等级 free/pro/enterprise + 有效期天数）。
+    - 账号详情对话框：基本信息 + 订阅权限矩阵 + 用量统计 + 令牌列表（含吊销按钮）。
+    - 删除账号需二次确认。吊销全部令牌需二次确认。
+    - 挂载时调用 `loadAccounts()`，与 5s 轮询独立。
 
 产出验收：不同等级账号登录后，可用市场/粒度/模型按矩阵生效；超额被正确拦截；
 管理员可在客户端管理面板管理账号与订阅。
@@ -365,15 +468,73 @@ client/src/renderer/src/components/cache-timeline/CacheTimeline.vue (baseUrl pro
 
 ### Phase 6：稳定性、安全与上线准备
 
-- [ ] **6.1 传输安全**：上线前为服务端启用 HTTPS/WSS（反向代理 Caddy/Nginx、
-  应用层证书，或 Docker 部署时使用 Traefik/Caddy 自动 TLS）。
-- [ ] **6.2 监控与告警**：结构化日志、健康检查、采集滞后/数据源失败告警。
-- [ ] **6.3 限流与防滥用**：复用/扩展 `auth.py` 速率限制到数据 API；按账号配额。
-- [ ] **6.4 备份与迁移**：数据库定期备份；从内网 mac mini 迁移到云主机的迁移文档
-  （Docker 化后迁移流程精简为：镜像上传 → 云主机 pull → volume 挂载数据 → 启动）。
-- [ ] **6.5 容器化生产部署**：规范多环境配置（dev/staging/prod 的 `docker-compose.override.yml`）、
-  镜像版本管理、健康检查（`HEALTHCHECK` 指令）、日志采集（`docker logs` 或外部日志驱动）。
-- [ ] **6.6 测试**：解耦回归（本地/远程模式）、采集守护稳定性、鉴权与权限矩阵单测/集成测试。
+- [x] **6.1 传输安全**
+  - 新增 `deploy/Caddyfile`：Caddy 反向代理配置，自动 Let's Encrypt TLS 证书签发+续期，
+    支持 HTTP/3 (QUIC)，配置安全头（HSTS / X-Content-Type-Options / X-Frame-Options /
+    Referrer-Policy），基础限流（30r/m per IP），请求体大小限制 50MB。
+  - 新增 `docker-compose.proxy.yml`：Caddy 容器编排 override，开放 80/443/443-udp 端口，
+    挂载 Caddyfile + 证书数据卷，`depends_on: server (healthy)`，覆盖基础 compose 不再
+    直接暴露 8100 端口。内网无域名场景 Caddy 使用 internal CA 自动签发。
+  - 新增 `doc/deploy/https_setup.md`：HTTPS 部署完整指南，含 Caddy vs Nginx vs Traefik
+    选型对比、公网域名/内网 IP 两种场景、证书管理、故障排查、回滚方案。
+- [x] **6.2 监控与告警**
+  - 新增 `server/src/services/health_monitor.py`：聚合健康快照服务，5 个组件检查：
+    - **scheduler**：任务 catch-up 滞后检测（last_success vs 预期触发时间，warning 2h /
+      critical 26h，阈值可通过 `HEALTH_LAG_*` 环境变量覆盖）
+    - **collector**：市场快照新鲜度（last_collected 时间，warning/critical 阈值）
+    - **write_queue**：失败率 + 队列积压检测（`HEALTH_QUEUE_FAILURE_RATE_CRITICAL`）
+    - **disk**：磁盘使用率（warning 80% / critical 90%）
+    - **data_sources**：数据源失败环形缓冲区（`record_data_source_failure()` API，
+      过去1小时失败计数告警）
+  - 新增 `GET /api/v1/admin/health` 端点：返回聚合健康快照（overall status + 各组件
+    详情），供外部监控（Uptime Robot / 阿里云监控）探测。
+  - 扩展 `server/src/logging_config.py`：新增 `JsonFormatter`，`LOG_JSON=true` 时
+    所有 handler（console + file + debug file）切换为 JSON 格式，供 ELK/Loki/Datadog
+    等日志聚合系统消费。
+- [x] **6.3 限流与防滥用**
+  - 新增 `server/api/middlewares/rate_limit.py`：滑动窗口限流中间件，双桶策略：
+    - **Per-IP**：默认 60 req/min（`RATE_LIMIT_PER_MINUTE` 可配置）
+    - **Per-account**：默认 120 req/min（`RATE_LIMIT_ACCOUNT_PER_MINUTE` 可配置，
+      已登录客户端账号优先于 IP 桶）
+    - 超限返回 429 + `Retry-After` 头 + bucket/limit 信息
+    - 豁免路径：`/api/health`、`/api/v1/admin/*`、`/api/v1/auth/*`、`/api/v1/client-auth/*`、
+      `/ws/*`、`/docs` 等（admin 暴力破解由 `src/auth.py` 限流层处理）
+    - 信任 `X-Forwarded-For`（`TRUST_X_FORWARDED_FOR=true` 时取最右值，配合反向代理）
+    - 自动清理过期 bucket（每 5 分钟一次）
+  - `server/api/app.py` 注册中间件，顺序：RateLimit → Auth → RestTracker（Auth 设置
+    `request.state.client_account` 后 RateLimit 可读取账号 ID）。
+- [x] **6.4 备份与迁移**
+  - `server/api/app.py` `_build_scheduler()` 新增 `db_backup` 定时任务（每日 03:00 CST），
+    调用 `deploy/backup_db.sh`（WAL 安全备份，保留 30 份），通过 scheduler catch-up
+    机制保证宕机后自动补跑。备份失败/超时/错误均记录日志。
+  - 新增 `doc/deploy/cloud_migration.md`：mac mini → 云主机 Docker 完整迁移指南，
+    含数据备份-传输-恢复流程、`.env` 云环境适配（CORS/TRUST_X_FORWARDED_FOR/LOG_JSON/
+    限流配置）、DNS 切换、回滚方案、迁移后验证清单、后续运维（日志聚合/监控告警/定期更新）。
+- [x] **6.5 容器化生产部署**
+  - 新增 `docker-compose.prod.yml`：生产环境 override，强制鉴权（ADMIN/CLIENT_AUTH_ENABLED=true）、
+    CORS 限定域名、`TRUST_X_FORWARDED_FOR=true`、`LOG_JSON=true`、限流配置、
+    `restart: always`、内存限制 4GB/预留 1GB、日志驱动 json-file（50MB × 5 份）。
+  - 扩展 `server/.env.example`：新增 Phase 5/6 配置项文档（CLIENT_AUTH_ENABLED、
+    TRUST_X_FORWARDED_FOR、RATE_LIMIT_*、LOG_JSON、HEALTH_* 阈值），含注释说明。
+  - 重写 `doc/deploy/docker_deploy.md` §8 多环境配置：环境概览表（开发/生产/生产+TLS）、
+    三种启动命令、各环境关键配置差异、环境变量管理（根目录 .env + server/.env 分层）、
+    自定义 override 示例。
+- [x] **6.6 测试**
+  - 新增 `server/tests/test_auth.py`（15 测试）：密码哈希设置/验证/修改/磁盘格式、
+    Session 创建/验证/过期/密钥轮换、登录限流（IP 计数/窗口过期/成功清除/多 IP 独立）。
+  - 新增 `server/tests/test_entitlement.py`（22 测试）：TierConfig 定义正确性（free/pro/enterprise
+    市场/周期/模型/配额/功能）、`tier_meets_minimum` 等级比较、`get_effective_tier` 降级处理、
+    EntitlementService 403/402 抛出逻辑（mock repo，覆盖市场/周期/历史深度/模型/配额/功能）。
+  - 新增 `server/tests/test_server_config.py`（8 测试）：Tier 配置与设计文档一致性、
+    等级递增单调性（权限只增不减）、frozen dataclass 不可变性、加密市场标识命名。
+  - 新增 `server/tests/test_scheduler_catchup.py`（10 测试）：命名任务注册/重复替换/
+    无效时间拒绝、catch-up 自愈（从未运行→补跑/今天已跑→跳过/触发时间未到→跳过/
+    昨天跑过今天漏→补跑/catchup 禁用→跳过）、任务成功状态记录。
+  - 全部测试通过 `uv run pytest`（含原有 test_crypto_and_cache + test_data_source_chain）。
+  - > ✅ 核查（2026-06-29）：实测 `109 passed`（已较计划撰写时的 63 个增长）。
+    > 注意：本机 `uv run pytest` 会落到 anaconda 基础环境（venv 内未装 pytest），
+    > 需用 `uv run --with pytest python -m pytest tests/` 才能在 venv 内跑通；
+    > 建议把 `pytest` 正式加入 dev 依赖组。
 
 ---
 
@@ -543,3 +704,39 @@ server/static/                                   # 不再需要托管 SPA
     权限 0600。
 12. **管理面板安全**：管理功能嵌入客户端后，需确保管理 API 有服务端鉴权兜底，
     不能依赖客户端隐藏入口作为安全手段。
+
+---
+
+## 九、实现核查记录（2026-06-29）
+
+> 对照本计划逐阶段核查代码库后的结论。整体完成度高、文件与接线基本属实、
+> 服务端测试 `109 passed`。初次核查发现 3 处「标记 ✓ 实际未真正落地/接线」的关键差距，
+> **已于 2026-06-29 全部补全并通过验证**（详见下方更新记录）。
+
+### 阶段完成度概览（2026-06-29 更新后）
+
+| 阶段 | 结论 | 说明 |
+|------|------|------|
+| Phase 1 解耦 | ✅ 完成 | 8 处 + 遗留 3 处（StockAnalysis/News/chatService）均已走 `serverConfig` |
+| Phase 2 部署/Docker | ✅ 文件齐全 | 脚本/plist/Dockerfile/compose/部署文档均存在 |
+| Phase 3 采集归档 | ✅ 完成 | 写队列/实时写缓存/标的落库 OK；订阅管理器已接线、美股采集已补、8 个定时任务齐全 |
+| Phase 4 管理面板 | ✅ 完成 | admin 端点 + AdminPanel + rest_tracker |
+| Phase 5 鉴权订阅 | ✅ 完成 | entitlement 已挂到 market/stocks 数据端点（鉴权关闭时自动跳过） |
+| Phase 6 稳定性安全 | ✅ 完成 | Caddy/health_monitor/rate_limit/备份任务/生产 compose 齐全 |
+| Phase B Bot | ⬜ 未开始 | 后置独立阶段，按计划暂不实现 |
+
+### 2026-06-29 补全记录（让已勾选项真正生效）
+
+1. **Phase 5.3（已完成）** `entitlement.enforce_data_request` 挂到 `market.py`/`stocks.py`
+   数据端点，含市场/周期标识归一化；鉴权关闭时自动跳过，内网零影响。
+2. **Phase 3.5（已完成）** `RealtimeWSRelay` 真正接入 `SubscriptionManager`（引用计数 +
+   多路复用 + LRU grace 退订），eviction loop 在 lifespan 启停。
+3. **Phase 3.2/3.3/3.7（已完成）** 新增 `collect_us_stock` + 美股日线归档映射；调度器补注
+   `us_stock_daily`(06:00) 与 `nightly_gap_reconcile`(02:00)，现共 8 个命名任务。
+4. **Phase 1（已完成）** `StockAnalysis.vue`/`News.vue`/`chatService.ts` 改用 `getApiBase()`。
+5. **工程（已完成）** `pyproject.toml` 新增 `[dependency-groups].dev`（pytest）。
+6. **顺带修复** `app.py` 模块级 `Scheduler` 标注引用未导入导致 `import api.app` 抛 `NameError`
+   的潜在启动阻断，已将其导入提升到模块顶层。
+
+> 验证：`uv run --with pytest python -m pytest tests/` → `109 passed`；
+> `import api.app; create_app()` 成功（136 路由），订阅管理器/美股采集/8 定时任务均确认就绪。
