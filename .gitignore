@@ -5,6 +5,11 @@ out
 .eslintcache
 *.log*
 
+.omo
+.opencode
+.vscode
+.codegraph
+
 # Python server (backend)
 server/.venv/
 server/__pycache__/
