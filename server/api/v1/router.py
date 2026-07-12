@@ -11,7 +11,7 @@ API v1 路由聚合
 
 from fastapi import APIRouter
 
-from api.v1.endpoints import analysis, auth, history, stocks, backtest, system_config, agent, usage, portfolio, news, market, cache, news_crawler, admin, client_auth, user_profile
+from api.v1.endpoints import analysis, auth, history, stocks, backtest, system_config, agent, usage, portfolio, news, market, cache, news_crawler, admin, client_auth, user_profile, proactive_messages
 
 # 创建 v1 版本主路由
 router = APIRouter(prefix="/api/v1")
@@ -110,4 +110,10 @@ router.include_router(
     user_profile.router,
     prefix="/user-profile",
     tags=["UserProfile"]
+)
+
+router.include_router(
+    proactive_messages.router,
+    prefix="/proactive-messages",
+    tags=["ProactiveMessages"]
 )
