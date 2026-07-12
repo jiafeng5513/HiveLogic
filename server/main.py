@@ -776,8 +776,11 @@ def main() -> int:
 
     bot_clients_started = False
     if start_serve:
-        if not prepare_webui_frontend_assets():
-            logger.warning("前端静态资源未就绪，继续启动 FastAPI 服务（Web 页面可能不可用）")
+        if os.getenv("WEBUI_AUTO_BUILD", "false").lower() == "true":
+            if not prepare_webui_frontend_assets():
+                logger.warning("前端静态资源未就绪，继续启动 FastAPI 服务（Web 页面可能不可用）")
+        else:
+            logger.info("WebUI 自动构建已关闭 (WEBUI_AUTO_BUILD!=true)，跳过前端资源准备")
         try:
             start_api_server(host=args.host, port=args.port, config=config)
             bot_clients_started = True

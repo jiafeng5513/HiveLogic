@@ -8,20 +8,27 @@
 1. 支持每日定时执行股票分析
 2. 支持定时执行大盘复盘
 3. 优雅处理信号，确保可靠退出
+4. 支持多个命名每日任务（各自独立触发时间）+ 漏跑自愈（catch-up）
 
 依赖：
 - schedule: 轻量级定时任务库
 """
 
 import logging
+import os
 import re
 import signal
+import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+_DEFAULT_DB = os.path.join(_DEFAULT_CACHE_DIR, "market_cache.db")
 
 
 class GracefulShutdown:
@@ -67,12 +74,14 @@ class Scheduler:
         self,
         schedule_time: str = "18:00",
         schedule_time_provider: Optional[Callable[[], str]] = None,
+        db_path: str = _DEFAULT_DB,
     ):
         """
         初始化调度器
 
         Args:
             schedule_time: 每日执行时间，格式 "HH:MM"
+            db_path: scheduler_task_log 表所在 SQLite 路径
         """
         try:
             import schedule
@@ -87,7 +96,108 @@ class Scheduler:
         self._task_callback: Optional[Callable] = None
         self._daily_job: Optional[Any] = None
         self._background_tasks: List[Dict[str, Any]] = []
+        self._named_jobs: Dict[str, Dict[str, Any]] = {}
+        self._db_path = db_path
+        self._db_lock = threading.Lock()
         self._running = False
+        self._bg_thread: Optional[threading.Thread] = None
+        self._init_task_log_table()
+
+    def _init_task_log_table(self):
+        """初始化 scheduler_task_log 表（记录每个命名任务的最近成功时间，供 catch-up 判断）"""
+        try:
+            os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+            with self._get_conn() as conn:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS scheduler_task_log (
+                        task_name       TEXT PRIMARY KEY,
+                        last_success_at REAL NOT NULL,
+                        last_duration   REAL DEFAULT 0,
+                        last_count      INTEGER DEFAULT 0,
+                        last_error      TEXT DEFAULT '',
+                        last_run_at     REAL DEFAULT 0
+                    );
+                """)
+        except sqlite3.Error as e:
+            logger.warning("[Scheduler] 初始化 task_log 表失败: %s", e)
+
+    @contextmanager
+    def _get_conn(self):
+        conn = sqlite3.connect(self._db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _record_task_success(self, task_name: str, duration: float, count: int = 0):
+        """记录任务成功（catch-up 依据）"""
+        now = time.time()
+        with self._db_lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO scheduler_task_log
+                           (task_name, last_success_at, last_duration, last_count, last_error, last_run_at)
+                           VALUES (?, ?, ?, ?, '', ?)""",
+                        (task_name, now, duration, count, now),
+                    )
+            except sqlite3.Error as e:
+                logger.warning("[Scheduler] 记录任务成功 %s 失败: %s", task_name, e)
+
+    def _record_task_failure(self, task_name: str, error: str):
+        """记录任务失败（仅更新 last_error + last_run_at，不更新 last_success_at）"""
+        now = time.time()
+        with self._db_lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO scheduler_task_log
+                           (task_name, last_success_at, last_duration, last_count, last_error, last_run_at)
+                           VALUES (
+                               ?,
+                               COALESCE((SELECT last_success_at FROM scheduler_task_log WHERE task_name = ?), 0),
+                               COALESCE((SELECT last_duration FROM scheduler_task_log WHERE task_name = ?), 0),
+                               COALESCE((SELECT last_count FROM scheduler_task_log WHERE task_name = ?), 0),
+                               ?,
+                               ?
+                           )""",
+                        (task_name, task_name, task_name, task_name, error[:500], now),
+                    )
+            except sqlite3.Error as e:
+                logger.warning("[Scheduler] 记录任务失败 %s 失败: %s", task_name, e)
+
+    def _get_last_success(self, task_name: str) -> Optional[float]:
+        """获取任务最近成功时间戳，无记录返回 None"""
+        with self._db_lock:
+            try:
+                with self._get_conn() as conn:
+                    row = conn.execute(
+                        "SELECT last_success_at FROM scheduler_task_log WHERE task_name = ?",
+                        (task_name,),
+                    ).fetchone()
+                    return row["last_success_at"] if row else None
+            except sqlite3.Error:
+                return None
+
+    def get_task_status(self) -> List[Dict[str, Any]]:
+        """获取所有命名任务的状态（供管理面板展示）"""
+        with self._db_lock:
+            try:
+                with self._get_conn() as conn:
+                    rows = conn.execute(
+                        "SELECT task_name, last_success_at, last_duration, last_count, last_error, last_run_at FROM scheduler_task_log ORDER BY task_name"
+                    ).fetchall()
+                    return [dict(r) for r in rows]
+            except sqlite3.Error as e:
+                logger.warning("[Scheduler] 读取任务状态失败: %s", e)
+                return []
 
     def set_daily_task(self, task: Callable, run_immediately: bool = True):
         """
@@ -186,6 +296,116 @@ class Scheduler:
 
         except Exception as e:
             logger.exception(f"定时任务执行失败: {e}")
+
+    # ==================== 命名每日任务（多任务 + catch-up） ====================
+
+    def add_named_daily_task(
+        self,
+        name: str,
+        schedule_time: str,
+        task: Callable,
+        run_catchup_on_start: bool = True,
+    ) -> bool:
+        """
+        注册一个命名的每日定时任务。每个任务独立配置触发时间，互不干扰。
+
+        Args:
+            name: 任务唯一名称（用于 catch-up 追踪与状态查询）
+            schedule_time: 触发时间 "HH:MM"（24小时制）
+            task: 无参任务函数
+            run_catchup_on_start: 若 True，调度器启动时检查该任务今天是否应跑未跑，若是则补跑
+
+        Returns:
+            True 表示注册成功
+        """
+        if not self._is_valid_schedule_time(schedule_time):
+            logger.warning("[Scheduler] 命名任务 %s 时间无效: %r", name, schedule_time)
+            return False
+
+        if name in self._named_jobs:
+            self._cancel_named_job(name)
+
+        job = self.schedule.every().day.at(schedule_time).do(
+            self._safe_run_named_task, name=name
+        )
+        self._named_jobs[name] = {
+            "job": job,
+            "time": schedule_time,
+            "task": task,
+            "run_catchup_on_start": run_catchup_on_start,
+        }
+        logger.info("[Scheduler] 已注册命名任务: %s @ %s", name, schedule_time)
+        return True
+
+    def _cancel_named_job(self, name: str):
+        """取消一个命名任务"""
+        entry = self._named_jobs.pop(name, None)
+        if not entry:
+            return
+        job = entry["job"]
+        if hasattr(self.schedule, "cancel_job"):
+            self.schedule.cancel_job(job)
+        else:
+            jobs = getattr(self.schedule, "jobs", None)
+            if isinstance(jobs, list) and job in jobs:
+                jobs.remove(job)
+
+    def _safe_run_named_task(self, name: str):
+        """安全执行命名任务（带异常捕获 + 成功/失败记录）"""
+        entry = self._named_jobs.get(name)
+        if not entry:
+            logger.warning("[Scheduler] 命名任务 %s 未注册", name)
+            return
+        task = entry["task"]
+        start = time.time()
+        try:
+            logger.info("=" * 50)
+            logger.info("[Scheduler] 命名任务 %s 开始 - %s", name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            result = task()
+            duration = time.time() - start
+            count = result if isinstance(result, int) else 0
+            self._record_task_success(name, duration, count)
+            logger.info("[Scheduler] 命名任务 %s 完成 (%.1fs)", name, duration)
+        except Exception as e:
+            self._record_task_failure(name, str(e))
+            logger.exception("[Scheduler] 命名任务 %s 失败: %s", name, e)
+
+    def run_catch_up(self):
+        """
+        补跑漏跑任务。对每个命名任务：
+          1. 读取 last_success_at（上次成功时间戳）
+          2. 计算今天该任务的触发时间戳
+          3. 若 now >= 今天触发时间 且 last_success_at < 今天触发时间，说明今天应跑未跑，补跑
+          4. 若 last_success_at 为 None（从未跑过），也补跑一次
+        幂等保证：任务自身必须做 upsert（如 kline_data 的 UNIQUE 约束），重复跑不会产生脏数据。
+        """
+        now = time.time()
+        today = datetime.now().strftime("%Y-%m-%d")
+        for name, entry in self._named_jobs.items():
+            if not entry.get("run_catchup_on_start"):
+                continue
+            schedule_time = entry["time"]
+            today_trigger_str = f"{today} {schedule_time}"
+            try:
+                today_trigger_ts = datetime.strptime(today_trigger_str, "%Y-%m-%d %H:%M").timestamp()
+            except ValueError:
+                continue
+            if now < today_trigger_ts:
+                logger.debug("[Scheduler] catch-up: %s 今天触发时间未到 (%s)", name, today_trigger_str)
+                continue
+            last_success = self._get_last_success(name)
+            if last_success is None:
+                logger.info("[Scheduler] catch-up: %s 从未运行过，立即补跑", name)
+            elif last_success < today_trigger_ts:
+                logger.info(
+                    "[Scheduler] catch-up: %s 上次成功于 %s，今天触发 %s 未跑，补跑",
+                    name,
+                    datetime.fromtimestamp(last_success).strftime("%Y-%m-%d %H:%M:%S"),
+                    today_trigger_str,
+                )
+            else:
+                continue
+            self._safe_run_named_task(name)
 
     def add_background_task(
         self,
@@ -291,6 +511,32 @@ class Scheduler:
                 logger.info(f"调度器运行中... 下次执行: {self._get_next_run_time()}")
 
         logger.info("调度器已停止")
+
+    def run_in_background(self, run_catchup: bool = True) -> bool:
+        """
+        在后台 daemon 线程中启动调度器主循环（供 FastAPI lifespan 调用）。
+
+        Args:
+            run_catchup: 启动前是否先执行一次 catch-up 补跑漏跑任务
+
+        Returns:
+            True 表示已启动（或已在运行）
+        """
+        if self._running:
+            return True
+        if run_catchup:
+            try:
+                self.run_catch_up()
+            except Exception as e:
+                logger.exception("[Scheduler] catch-up 执行失败: %s", e)
+        self._bg_thread = threading.Thread(
+            target=self.run,
+            daemon=True,
+            name="hivelogic-scheduler",
+        )
+        self._bg_thread.start()
+        logger.info("[Scheduler] 已在后台线程启动")
+        return True
 
     def _get_next_run_time(self) -> str:
         """获取下次执行时间"""

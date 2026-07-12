@@ -31,11 +31,59 @@ import json
 import logging
 import os
 import time
+import uuid
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from src.services.subscription_manager import SubscriptionManager
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _CandleBuilder:
+    """单标的 1 分钟 K 线增量构建器（从 tick quotes 聚合）"""
+    symbol: str
+    market: str
+    minute_ts: int = 0
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    close: float = 0.0
+    volume: float = 0.0
+    amount: float = 0.0
+    has_data: bool = False
+
+    def update(self, price: float, vol: float = 0.0, amt: float = 0.0, ts_ms: int = 0):
+        bucket = (ts_ms // 60000) * 60000 if ts_ms else (int(time.time() * 1000) // 60000) * 60000
+        if self.minute_ts == 0:
+            self.minute_ts = bucket
+            self.open = self.high = self.low = self.close = price
+            self.volume = vol
+            self.amount = amt
+            self.has_data = True
+            return
+        if bucket != self.minute_ts:
+            return
+        self.high = max(self.high, price)
+        self.low = min(self.low, price)
+        self.close = price
+        self.volume += vol
+        self.amount += amt
+
+    def to_kline(self, is_complete: bool = True) -> Dict[str, Any]:
+        return {
+            "timestamp": self.minute_ts,
+            "open": self.open,
+            "high": self.high,
+            "low": self.low,
+            "close": self.close,
+            "volume": self.volume,
+            "amount": self.amount,
+            "is_complete": is_complete,
+        }
 
 
 class RealtimeWSRelay:
@@ -56,12 +104,19 @@ class RealtimeWSRelay:
 
         # 前端客户端管理
         self._clients: Set[WebSocket] = set()
-        # 每个客户端的订阅: {ws: {"quotes": set(...), "depth": set(...)}}
+        # 每个客户端的订阅: {ws: {"quotes": set(...), "depth": set(...)}}（用于按客户端分发）
         self._subscriptions: Dict[WebSocket, Dict[str, Set[str]]] = {}
+        # ws → 订阅管理器使用的稳定 client_id
+        self._client_ids: Dict[WebSocket, str] = {}
 
-        # 聚合订阅 (所有客户端的并集)
-        self._aggregated_quotes: Set[str] = set()
-        self._aggregated_depth: Set[str] = set()
+        # 订阅管理器：引用计数 + 多路复用 + LRU grace 退订（聚合订阅的真相源）
+        grace = float(os.environ.get("REALTIME_LRU_GRACE_SECONDS", "60"))
+        self._submgr = SubscriptionManager(
+            lru_grace_seconds=grace,
+            on_upstream_subscribe=self._on_upstream_sub,
+            on_upstream_unsubscribe=self._on_upstream_unsub,
+        )
+        self._evict_task: Optional[asyncio.Task] = None
 
         # 上游 TickFlow WebSocket 状态
         self._upstream_ws = None
@@ -77,6 +132,11 @@ class RealtimeWSRelay:
         self._api_key = os.environ.get("TICKFLOW_API_KEY", "")
         self._upstream_url = "wss://api.tickflow.org/v1/ws/stream"
 
+        # 实时 tick → 1m K线聚合（写缓存）
+        self._candle_builders: Dict[str, _CandleBuilder] = {}
+        self._candle_flush_task: Optional[asyncio.Task] = None
+        self._candle_cache_enabled = os.environ.get("REALTIME_CACHE_ENABLED", "true").lower() == "true"
+
     @property
     def has_api_key(self) -> bool:
         return bool(self._api_key.strip())
@@ -89,6 +149,28 @@ class RealtimeWSRelay:
         if self._polling_task and not self._polling_task.done():
             return "polling"
         return "idle"
+
+    # ==================== 聚合订阅（由订阅管理器派生） ====================
+
+    @property
+    def _aggregated_quotes(self) -> Set[str]:
+        """quotes 频道当前需上游保活的标的（含 grace 期内）。"""
+        return self._submgr.get_all_active().get("quotes", set())
+
+    @property
+    def _aggregated_depth(self) -> Set[str]:
+        """depth 频道当前需上游保活的标的（含 grace 期内）。"""
+        return self._submgr.get_all_active().get("depth", set())
+
+    async def _on_upstream_sub(self, channel: str, symbol: str):
+        """订阅管理器回调：某标的引用计数 0→1，需向上游订阅。"""
+        if self._upstream_connected:
+            await self._upstream_subscribe(channel, [symbol])
+
+    async def _on_upstream_unsub(self, channel: str, symbol: str):
+        """订阅管理器回调：某标的 grace 期满被退订，向上游退订。"""
+        if self._upstream_connected:
+            await self._upstream_unsubscribe(channel, [symbol])
 
     def reload_config(self):
         """重新加载配置 (API Key 变更后调用)"""
@@ -106,6 +188,7 @@ class RealtimeWSRelay:
         await ws.accept()
         self._clients.add(ws)
         self._subscriptions[ws] = {"quotes": set(), "depth": set()}
+        self._client_ids[ws] = uuid.uuid4().hex
         logger.info("[RealtimeWS] 新客户端连接, 当前 %d 个", len(self._clients))
 
         # 通知客户端当前上游状态
@@ -145,7 +228,11 @@ class RealtimeWSRelay:
             if not isinstance(symbols, list):
                 symbols = [symbols]
             self._subscriptions[ws].setdefault(channel, set()).update(symbols)
-            await self._update_aggregated_subscriptions()
+            cid = self._client_ids.get(ws)
+            if cid:
+                # 引用计数 0→1 时由管理器回调触发上游订阅
+                await self._submgr.subscribe(cid, channel, symbols)
+            self._ensure_transports()
             return
 
         if op == "unsubscribe":
@@ -156,7 +243,10 @@ class RealtimeWSRelay:
             sub_set = self._subscriptions[ws].get(channel, set())
             for s in symbols:
                 sub_set.discard(s)
-            await self._update_aggregated_subscriptions()
+            cid = self._client_ids.get(ws)
+            if cid:
+                # 引用计数降为 0 进入 grace；实际上游退订由 eviction 循环完成
+                await self._submgr.unsubscribe(cid, channel, symbols)
             return
 
         await self._send_to_client(ws, {"op": "error", "message": f"未知操作: {op}"})
@@ -165,48 +255,57 @@ class RealtimeWSRelay:
         """移除一个客户端连接"""
         self._clients.discard(ws)
         self._subscriptions.pop(ws, None)
+        cid = self._client_ids.pop(ws, None)
+        if cid:
+            # 该客户端所有订阅进入 grace；实际退订由 eviction 循环完成
+            await self._submgr.remove_client(cid)
         logger.info("[RealtimeWS] 客户端断开, 剩余 %d 个", len(self._clients))
-        await self._update_aggregated_subscriptions()
 
-    # ==================== 聚合订阅管理 ====================
+    # ==================== 传输层管理（上游 WS / 轮询） ====================
 
-    async def _update_aggregated_subscriptions(self):
-        """重新计算聚合订阅 (所有客户端的并集)"""
-        new_quotes: Set[str] = set()
-        new_depth: Set[str] = set()
+    def _ensure_transports(self):
+        """有活跃订阅但上游未连通时，启动轮询并尝试连接上游。"""
+        if (self._aggregated_quotes or self._aggregated_depth) and not self._upstream_connected:
+            self._ensure_polling()
+            self._ensure_upstream()
 
-        for subs in self._subscriptions.values():
-            new_quotes.update(subs.get("quotes", set()))
-            new_depth.update(subs.get("depth", set()))
-
-        added_quotes = new_quotes - self._aggregated_quotes
-        removed_quotes = self._aggregated_quotes - new_quotes
-        added_depth = new_depth - self._aggregated_depth
-        removed_depth = self._aggregated_depth - new_depth
-
-        self._aggregated_quotes = new_quotes
-        self._aggregated_depth = new_depth
-
-        # 通知上游订阅变更
-        if self._upstream_connected:
-            if added_quotes:
-                await self._upstream_subscribe("quotes", list(added_quotes))
-            if removed_quotes:
-                await self._upstream_unsubscribe("quotes", list(removed_quotes))
-            if added_depth:
-                await self._upstream_subscribe("depth", list(added_depth))
-            if removed_depth:
-                await self._upstream_unsubscribe("depth", list(removed_depth))
-
-        # 无客户端时停止轮询; 有客户端但无上游时启动轮询
+    def _maybe_stop_transports(self):
+        """无任何活跃/grace 订阅时，停止轮询并取消上游连接任务。"""
         if not self._aggregated_quotes and not self._aggregated_depth:
             self._stop_polling()
             if self._upstream_task and not self._upstream_task.done():
                 self._upstream_task.cancel()
-        elif not self._upstream_connected:
-            self._ensure_polling()
-            # 也尝试连接上游
-            self._ensure_upstream()
+
+    # ==================== 订阅 LRU 退订（eviction） ====================
+
+    def start_subscription_eviction_loop(self, interval: float = 15.0):
+        """启动订阅 grace 退订循环（供 FastAPI lifespan 调用）。"""
+        if self._evict_task and not self._evict_task.done():
+            return
+        self._evict_task = asyncio.ensure_future(self._subscription_evict_loop(interval))
+
+    async def stop_subscription_eviction_loop(self):
+        if self._evict_task:
+            self._evict_task.cancel()
+            try:
+                await self._evict_task
+            except asyncio.CancelledError:
+                pass
+            self._evict_task = None
+
+    async def _subscription_evict_loop(self, interval: float):
+        """周期性退订 grace 期满的标的，并在无订阅时收敛传输层。"""
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                evicted = await self._submgr.evict_expired()
+                if evicted:
+                    logger.debug("[RealtimeWS] LRU 退订 %d 个标的", len(evicted))
+                self._maybe_stop_transports()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("[RealtimeWS] eviction loop error: %s", e)
 
     # ==================== 上游 TickFlow WebSocket ====================
 
@@ -390,6 +489,8 @@ class RealtimeWSRelay:
             if client_quotes:
                 await self._send_to_client(ws, {"op": "quotes", "data": client_quotes})
 
+        await self._update_candles(quotes)
+
     async def _dispatch_depth(self, depth: Dict[str, Any]):
         """将五档数据分发给已订阅的前端客户端"""
         symbol = depth.get("symbol", "")
@@ -462,4 +563,126 @@ class RealtimeWSRelay:
             "subscribed_quotes": list(self._aggregated_quotes),
             "subscribed_depth": list(self._aggregated_depth),
             "upstream_connected": self._upstream_connected,
+            "active_candle_builders": len(self._candle_builders),
+            "subscription_manager": self._submgr.get_status(),
         }
+
+    # ==================== 实时 tick → 1m K线缓存写入 ====================
+
+    @staticmethod
+    def _infer_market(symbol: str) -> str:
+        """从内部标的代码推断 market 标识（用于 kline_data 表的 market 列）"""
+        from src.services.tickflow_symbol import to_tickflow_symbol
+        tf = to_tickflow_symbol(symbol)
+        if "." not in tf:
+            return "unknown"
+        suffix = tf.rsplit(".", 1)[1].upper()
+        if suffix in ("SH", "SZ", "BJ"):
+            return "cn"
+        if suffix == "HK":
+            return "hk"
+        if suffix == "US":
+            return "us"
+        return suffix.lower()
+
+    async def _update_candles(self, quotes: List[Dict[str, Any]]):
+        """将上游/轮询的 quotes 增量更新到 1m candle builder，并 flush 已收盘的分钟"""
+        if not self._candle_cache_enabled or not quotes:
+            return
+        now_ms = int(time.time() * 1000)
+        current_minute = (now_ms // 60000) * 60000
+        for q in quotes:
+            sym = q.get("symbol", "")
+            if not sym:
+                continue
+            price = q.get("price")
+            if price is None:
+                continue
+            try:
+                price = float(price)
+            except (TypeError, ValueError):
+                continue
+            vol = float(q.get("volume") or 0)
+            amt = float(q.get("turnover") or 0)
+            ts = q.get("timestamp")
+            if isinstance(ts, (int, float)) and ts > 0:
+                ts_ms = int(ts)
+                if ts_ms < 1_000_000_000_000:
+                    ts_ms *= 1000
+            else:
+                ts_ms = now_ms
+
+            builder = self._candle_builders.get(sym)
+            if builder is None:
+                builder = _CandleBuilder(symbol=sym, market=self._infer_market(sym))
+                self._candle_builders[sym] = builder
+
+            bucket = (ts_ms // 60000) * 60000
+            if builder.minute_ts != 0 and bucket != builder.minute_ts:
+                await self._flush_candle(builder, is_complete=True)
+                builder = _CandleBuilder(symbol=sym, market=builder.market)
+                self._candle_builders[sym] = builder
+
+            builder.update(price=price, vol=vol, amt=amt, ts_ms=ts_ms)
+
+        await self._flush_closed_candles(current_minute)
+
+    async def _flush_closed_candles(self, current_minute: int):
+        """flush 所有已收盘的 candle（minute_ts < current_minute）到缓存"""
+        to_flush = [
+            (sym, b) for sym, b in self._candle_builders.items()
+            if b.minute_ts and b.minute_ts < current_minute
+        ]
+        for sym, builder in to_flush:
+            await self._flush_candle(builder, is_complete=True)
+
+    async def _flush_candle(self, builder: _CandleBuilder, is_complete: bool):
+        """将单个 candle 写入 kline_cache（通过 db_write_queue 串行化）"""
+        if not builder.has_data:
+            return
+        kline = builder.to_kline(is_complete=is_complete)
+        try:
+            from src.services.db_write_queue import enqueue_write
+            from src.services.kline_cache_manager import get_kline_cache_manager
+            manager = get_kline_cache_manager()
+            await enqueue_write(
+                manager.upsert_klines,
+                builder.market,
+                builder.symbol,
+                "1m",
+                [kline],
+                "realtime_ws",
+                label=f"rt_kline_{builder.symbol}",
+            )
+        except Exception as e:
+            logger.debug("[RealtimeWS] candle flush failed for %s: %s", builder.symbol, e)
+
+    def start_candle_flush_loop(self):
+        """启动定期 flush 协程（每 15s flush 一次已收盘的分钟 candle）"""
+        if self._candle_flush_task and not self._candle_flush_task.done():
+            return
+        if not self._candle_cache_enabled:
+            return
+        self._candle_flush_task = asyncio.ensure_future(self._candle_flush_loop())
+
+    async def _candle_flush_loop(self):
+        """定期扫描并 flush 已收盘的 candle builder"""
+        while True:
+            try:
+                await asyncio.sleep(15)
+                now_ms = int(time.time() * 1000)
+                current_minute = (now_ms // 60000) * 60000
+                await self._flush_closed_candles(current_minute)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("[RealtimeWS] candle flush loop error: %s", e)
+
+    async def stop_candle_flush_loop(self):
+        if self._candle_flush_task:
+            self._candle_flush_task.cancel()
+            try:
+                await self._candle_flush_task
+            except asyncio.CancelledError:
+                pass
+            self._candle_flush_task = None

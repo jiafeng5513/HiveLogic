@@ -6,8 +6,9 @@
 
 职责：
 1. 统一各市场品种列表获取接口
-2. 内存缓存（TTL 1小时）避免频繁调外部API
+2. 内存缓存（TTL 1小时）+ SQLite 持久化（TTL 24小时），避免频繁调外部API
 3. 为批量下载提供品种列表支持
+4. 服务端重启后仍可秒级返回标的列表（满足「开箱即有数据」需求）
 
 支持市场：
 - crypto_binance: 通过 Binance exchangeInfo API 获取 USDT 现货交易对
@@ -18,41 +19,97 @@
 """
 
 import logging
+import os
+import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-# 缓存有效期: 1小时
+DEFAULT_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+DEFAULT_DB = os.path.join(DEFAULT_CACHE_DIR, "market_cache.db")
+
+# 内存缓存有效期: 1小时（进程内快速命中）
 CACHE_TTL_SECONDS = 3600
+# DB 缓存有效期: 24小时（进程重启后仍可命中，避免每次重启都打外部 API）
+DB_TTL_SECONDS = 86400
 
 
 class SymbolListService:
     """统一品种列表发现服务"""
 
-    def __init__(self):
+    def __init__(self, db_path: str = DEFAULT_DB):
+        self._db_path = db_path
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
+        self._init_db()
 
-    def get_symbols(self, market: str) -> List[Dict[str, str]]:
+    def _init_db(self):
+        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+        with self._get_conn() as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS symbol_list (
+                    market      TEXT NOT NULL,
+                    symbol      TEXT NOT NULL,
+                    name        TEXT DEFAULT '',
+                    updated_at  REAL NOT NULL,
+                    PRIMARY KEY (market, symbol)
+                );
+                CREATE INDEX IF NOT EXISTS idx_symbol_list_market
+                    ON symbol_list(market);
+
+                CREATE TABLE IF NOT EXISTS symbol_list_meta (
+                    market          TEXT PRIMARY KEY,
+                    last_refreshed  REAL NOT NULL,
+                    count           INTEGER DEFAULT 0
+                );
+            """)
+
+    @contextmanager
+    def _get_conn(self):
+        conn = sqlite3.connect(self._db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def get_symbols(self, market: str, force_refresh: bool = False) -> List[Dict[str, str]]:
         """
         获取指定市场的全部可下载品种列表。
 
+        读取顺序: 内存缓存 → DB 缓存 → 外部数据源。
+        force_refresh=True 时跳过所有缓存，强制从数据源拉取并回写。
+
         Args:
             market: 市场标识 - "crypto_binance", "crypto_okx", "cn", "us", "hk"
+            force_refresh: 是否强制刷新缓存
 
         Returns:
             品种列表 [{"symbol": "BTCUSDT", "name": "BTC/USDT"}, ...]
         """
-        # 检查缓存
-        cached = self._get_cached(market)
-        if cached is not None:
-            return cached
+        if not force_refresh:
+            cached = self._get_cached(market)
+            if cached is not None:
+                return cached
 
-        # 根据市场调用对应方法
+            db_symbols = self._load_from_db(market)
+            if db_symbols is not None:
+                self._set_cached(market, db_symbols)
+                logger.debug(f"[SymbolListService] {market} 从 DB 加载 {len(db_symbols)} 个品种")
+                return db_symbols
+
         dispatch = {
             "crypto_binance": self._fetch_binance_symbols,
             "crypto_okx": self._fetch_okx_symbols,
@@ -69,10 +126,16 @@ class SymbolListService:
         try:
             symbols = fetcher()
             self._set_cached(market, symbols)
-            logger.info(f"[SymbolListService] {market} 获取 {len(symbols)} 个品种")
+            self._persist_to_db(market, symbols)
+            logger.info(f"[SymbolListService] {market} 获取 {len(symbols)} 个品种 (已持久化)")
             return symbols
         except Exception as e:
             logger.error(f"[SymbolListService] {market} 获取品种列表失败: {e}")
+            # 最后兜底: 如果 DB 有旧数据（即使过期），返回旧数据比空列表好
+            stale = self._load_from_db(market, ignore_ttl=True)
+            if stale:
+                logger.warning(f"[SymbolListService] {market} 数据源失败，返回 DB 旧数据 ({len(stale)} 个)")
+                return stale
             return []
 
     def get_symbol_count(self, market: str) -> int:
@@ -81,12 +144,17 @@ class SymbolListService:
         return len(symbols)
 
     def invalidate_cache(self, market: Optional[str] = None):
-        """清除缓存"""
+        """清除缓存（内存 + DB meta，下次读取将强制从数据源拉取）"""
         with self._lock:
             if market:
                 self._cache.pop(market, None)
             else:
                 self._cache.clear()
+        with self._get_conn() as conn:
+            if market:
+                conn.execute("DELETE FROM symbol_list_meta WHERE market = ?", (market,))
+            else:
+                conn.execute("DELETE FROM symbol_list_meta")
 
     # ==================== 缓存管理 ====================
 
@@ -100,6 +168,47 @@ class SymbolListService:
     def _set_cached(self, market: str, data: List[Dict[str, str]]):
         with self._lock:
             self._cache[market] = {"data": data, "time": time.time()}
+
+    # ==================== DB 持久化 ====================
+
+    def _load_from_db(self, market: str, ignore_ttl: bool = False) -> Optional[List[Dict[str, str]]]:
+        """从 DB 加载品种列表。返回 None 表示未命中（无数据或过期）。"""
+        try:
+            with self._get_conn() as conn:
+                meta = conn.execute(
+                    "SELECT last_refreshed, count FROM symbol_list_meta WHERE market = ?",
+                    (market,),
+                ).fetchone()
+                if not meta or meta["count"] == 0:
+                    return None
+                if not ignore_ttl and time.time() - meta["last_refreshed"] > DB_TTL_SECONDS:
+                    return None
+                rows = conn.execute(
+                    "SELECT symbol, name FROM symbol_list WHERE market = ? ORDER BY symbol",
+                    (market,),
+                ).fetchall()
+                return [{"symbol": r["symbol"], "name": r["name"]} for r in rows]
+        except sqlite3.Error as e:
+            logger.warning(f"[SymbolListService] DB 读取 {market} 失败: {e}")
+            return None
+
+    def _persist_to_db(self, market: str, symbols: List[Dict[str, str]]):
+        """将品种列表持久化到 DB（全量替换该 market 的记录）"""
+        if not symbols:
+            return
+        now = time.time()
+        with self._write_lock:
+            with self._get_conn() as conn:
+                conn.execute("DELETE FROM symbol_list WHERE market = ?", (market,))
+                conn.executemany(
+                    "INSERT INTO symbol_list (market, symbol, name, updated_at) VALUES (?, ?, ?, ?)",
+                    [(market, s["symbol"], s.get("name", ""), now) for s in symbols],
+                )
+                conn.execute(
+                    """INSERT OR REPLACE INTO symbol_list_meta (market, last_refreshed, count)
+                       VALUES (?, ?, ?)""",
+                    (market, now, len(symbols)),
+                )
 
     # ==================== Binance ====================
 

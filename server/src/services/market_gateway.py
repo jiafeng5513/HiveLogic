@@ -149,9 +149,24 @@ class MarketGateway:
         self._tickflow_fetcher = None
         self._realtime_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}  # market_type -> (timestamp, data)
         self._realtime_cache_ttl = 10.0  # 缓存有效期（秒），避免高频触发限流
+        self._cache_metrics = {"kline_cache_hit": 0, "kline_cache_miss": 0, "kline_live_fetch": 0}
         self._register_chains()
         self._initialized = True
         logger.info("[MarketGateway] 初始化完成 (含数据源链)")
+
+    _MARKET_TYPE_TO_KLINE = {
+        "cn_stock": "cn", "cn_etf": "cn", "cn_futures": "cn",
+        "hk_stock": "hk", "us_stock": "us", "crypto": "crypto_binance",
+    }
+
+    _PERIOD_TO_INTERVAL = {
+        "1": "1m", "5": "5m", "15": "15m", "30": "30m",
+        "60": "60m", "1h": "1h", "4h": "4h",
+        "1d": "1d", "1w": "1w", "1M": "1M",
+    }
+
+    def get_cache_metrics(self) -> Dict[str, int]:
+        return dict(self._cache_metrics)
 
     def _get_tickflow_fetcher(self):
         """延迟初始化 TickFlowFetcher (避免启动时导入失败)"""
@@ -290,7 +305,37 @@ class MarketGateway:
         - bars: K 线数据列表
         - no_data: True 表示已无更多历史数据
         """
-        # 尝试从缓存获取
+        kline_market = self._MARKET_TYPE_TO_KLINE.get(market_type, "")
+        interval = self._PERIOD_TO_INTERVAL.get(period, period)
+
+        if kline_market and interval:
+            try:
+                from src.services.kline_cache_manager import get_kline_cache_manager
+                manager = get_kline_cache_manager()
+                start_ms = start_time * 1000 if start_time > 0 else 0
+                end_ms = end_time * 1000 if end_time > 0 else int(time.time() * 1000)
+                df = manager.query_klines(kline_market, symbol, interval, start_ms, end_ms)
+                if df is not None and not df.empty:
+                    bars = []
+                    for _, row in df.iterrows():
+                        bars.append({
+                            "time": int(row["timestamp"] // 1000),
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                            "volume": float(row.get("volume", 0)),
+                            "turnover": float(row.get("amount", 0)),
+                        })
+                    if bars:
+                        self._cache_metrics["kline_cache_hit"] += 1
+                        return bars[-limit:], False
+            except Exception as e:
+                logger.debug("[MarketGateway] kline_data 缓存查询异常: %s", e)
+
+        self._cache_metrics["kline_cache_miss"] += 1
+
+        # 尝试从 MarketCache 获取
         if start_time > 0 and end_time > 0:
             cached = self._cache.get_cached_kline(symbol, period, start_time, end_time)
             if cached:
@@ -298,6 +343,7 @@ class MarketGateway:
                 return cached, False
 
         # 从数据源拉取
+        self._cache_metrics["kline_live_fetch"] += 1
         try:
             bars = self._fetch_kline_from_source(
                 symbol, market_type, period, start_time, end_time, limit

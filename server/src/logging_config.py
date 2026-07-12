@@ -10,7 +10,9 @@
 3. 自动降低第三方库日志级别
 """
 
+import json
 import logging
+import os
 import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -20,6 +22,23 @@ from typing import List, Optional
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(pathname)s:%(lineno)d | %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+class JsonFormatter(logging.Formatter):
+    """Emit log records as single-line JSON for log aggregation (ELK/Loki/Datadog)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "file": record.pathname,
+            "line": record.lineno,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
 
 
 class RelativePathFormatter(logging.Formatter):
@@ -98,10 +117,14 @@ def setup_logging(
     rel_formatter = RelativePathFormatter(
         LOG_FORMAT, LOG_DATE_FORMAT, relative_to=project_root
     )
+    # LOG_JSON=true 时使用 JSON 格式（供日志聚合系统 ELK/Loki/Datadog 消费）
+    use_json = os.getenv("LOG_JSON", "false").lower() in ("true", "1", "yes")
+    active_formatter = JsonFormatter() if use_json else rel_formatter
+
     # Handler 1: 控制台输出
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
-    console_handler.setFormatter(rel_formatter)
+    console_handler.setFormatter(active_formatter)
     root_logger.addHandler(console_handler)
 
     # Handler 2: 常规日志文件（INFO 级别，10MB 轮转）
@@ -112,7 +135,7 @@ def setup_logging(
         encoding='utf-8'
     )
     file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(rel_formatter)
+    file_handler.setFormatter(active_formatter)
     root_logger.addHandler(file_handler)
 
     # Handler 3: 调试日志文件（DEBUG 级别，包含所有详细信息）
@@ -123,7 +146,7 @@ def setup_logging(
         encoding='utf-8'
     )
     debug_handler.setLevel(logging.DEBUG)
-    debug_handler.setFormatter(rel_formatter)
+    debug_handler.setFormatter(active_formatter)
     root_logger.addHandler(debug_handler)
 
     # 降低第三方库的日志级别
