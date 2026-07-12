@@ -5,15 +5,18 @@ out
 .eslintcache
 *.log*
 
+# ai tools
 .omo
 .opencode
 .vscode
 .codegraph
 
+# common ignores
+__pycache__
+nul
+
 # Python server (backend)
 server/.venv/
-server/__pycache__/
-server/**/__pycache__/
 server/*.pyc
 server/.env
 server/data/
@@ -22,5 +25,6 @@ server/src/data/*.db
 server/src/data/*.db-wal
 server/src/data/*.db-shm
 server/logs/
+
+# custom ignores
 doc/api_keys.md
-nul

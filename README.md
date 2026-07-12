@@ -1,4 +1,4 @@
-<div align=center><img width="100" height="100" src="resources/hivelogic_logo.png"/></div>
+<div align=center><img width="100" height="100" src="client/resources/hivelogic_logo.png"/></div>
 </br>
 <div align=center>HiveLogic</div>
 </br>
