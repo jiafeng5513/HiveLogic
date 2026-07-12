@@ -1,0 +1,93 @@
+# HiveLogic Caddyfile — 反向代理 + 自动 HTTPS/WSS
+#
+# 用法:
+#   1. 将 your-domain.com 替换为实际域名
+#   2. docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+#   3. Caddy 自动申请 Let's Encrypt 证书并续期
+#
+# 内网无域名时可用内网 IP（自签名证书，浏览器需手动信任）:
+#   将 your-domain.com 替换为 192.168.50.7，Caddy 会用 internal CA 签发
+
+your-domain.com {
+	# ============================================================
+	# 日志
+	# ============================================================
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+
+	# ============================================================
+	# 安全头
+	# ============================================================
+	header {
+		# HSTS: 强制 HTTPS（生产环境启用，内网可注释掉）
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		# 防止 MIME 嗅探
+		X-Content-Type-Options "nosniff"
+		# 禁止嵌入iframe（防点击劫持）
+		X-Frame-Options "DENY"
+		# 控制 Referrer 信息
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	# ============================================================
+	# API 反向代理 → FastAPI 后端
+	# ============================================================
+	handle /api/* {
+		reverse_proxy hivelogic-server:8100 {
+			# 传递真实客户端信息
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+
+			# WebSocket 支持（/ws/market 实时行情）
+			transport http {
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+
+	# ============================================================
+	# WebSocket 反向代理（实时行情中继）
+	# ============================================================
+	handle /ws/* {
+		reverse_proxy hivelogic-server:8100 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# ============================================================
+	# 健康检查（不记日志）
+	# ============================================================
+	handle /api/health {
+		reverse_proxy hivelogic-server:8100
+	}
+
+	# ============================================================
+	# 其他路径 → 后端 SPA（如已构建）
+	# ============================================================
+	handle {
+		reverse_proxy hivelogic-server:8100
+	}
+
+	# ============================================================
+	# 请求体大小限制（分析报告上传等）
+	# ============================================================
+	request_body {
+		max_size 50MB
+	}
+
+	# ============================================================
+	# 基础限流（防暴力扫描，深层限流在后端中间件）
+	# ============================================================
+	rate_limit {
+		zone static_ip 30r/m
+	}
+}

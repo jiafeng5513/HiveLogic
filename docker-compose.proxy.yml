@@ -1,0 +1,42 @@
+# ============================================================
+# Docker Compose Override: 添加 Caddy 反向代理 (HTTPS/WSS)
+# ============================================================
+#
+# 用法:
+#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+#
+# 前置条件:
+#   - 将 your-domain.com 替换为实际域名（编辑 deploy/Caddyfile）
+#   - DNS A 记录指向本机公网 IP
+#   - 开放 80 + 443 端口（Caddy 通过 80 端口完成 ACME HTTP-01 验证）
+#
+# 内网无域名场景:
+#   将 Caddyfile 中 your-domain.com 替换为内网 IP（如 192.168.50.7）
+#   Caddy 会使用 internal CA 自动签发证书（浏览器需手动信任）
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: hivelogic-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3 (QUIC)
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - default
+
+  server:
+    # 覆盖基础 compose：不再直接暴露 8100，由 Caddy 代理
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:

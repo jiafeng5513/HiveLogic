@@ -1,0 +1,26 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hivelogic-server
+    ports:
+      - "8100:8100"
+    volumes:
+      - hivelogic-data:/data
+      - ./server/.env:/app/server/.env:ro
+    environment:
+      - DATABASE_PATH=/data/stock_analysis.db
+      - LOG_DIR=/data/logs
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - CORS_ALLOW_ALL=${CORS_ALLOW_ALL:-true}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  hivelogic-data:

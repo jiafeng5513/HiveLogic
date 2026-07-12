@@ -1,0 +1,35 @@
+# ============================================================
+# Docker Compose Override: 生产环境配置
+# ============================================================
+#
+# 用法:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# 与 Caddy 反向代理组合:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.proxy.yml up -d
+
+services:
+  server:
+    environment:
+      - CORS_ALLOW_ALL=false
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://your-domain.com}
+      - ADMIN_AUTH_ENABLED=${ADMIN_AUTH_ENABLED:-true}
+      - CLIENT_AUTH_ENABLED=${CLIENT_AUTH_ENABLED:-true}
+      - TRUST_X_FORWARDED_FOR=true
+      - LOG_JSON=true
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-60}
+      - RATE_LIMIT_ACCOUNT_PER_MINUTE=${RATE_LIMIT_ACCOUNT_PER_MINUTE:-120}
+      - SQLITE_WAL_ENABLED=true
+      - SQLITE_BUSY_TIMEOUT_MS=5000
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
