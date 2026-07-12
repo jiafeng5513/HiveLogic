@@ -36,6 +36,10 @@ class DecisionLog(Base):
     risk_verdict_json = Column(Text)  # Risk debate verdict JSON
     debate_summary_json = Column(Text)  # Bull/Bear debate summary
 
+    # Phase A: autonomous mode — investigation plan + step reasoning trace
+    autonomous_plan_json = Column(Text)  # AutonomousPlannerAgent investigation plan
+    autonomous_step_reasoning_json = Column(Text)  # Per-step reasoning chain (REASONING model)
+
     # 模式
     orchestrator_mode = Column(String(20))  # quick/standard/full/specialist
 

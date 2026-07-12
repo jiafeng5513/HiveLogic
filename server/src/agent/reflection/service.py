@@ -93,6 +93,8 @@ class ReflectionService:
         research_plan: Optional[dict] = None,
         risk_verdict: Optional[dict] = None,
         debate_summary: Optional[dict] = None,
+        autonomous_plan: Optional[dict] = None,
+        autonomous_step_reasoning: Optional[dict] = None,
     ) -> Optional[int]:
         """记录决策日志。失败时返回 None 而非抛出异常。"""
         try:
@@ -106,6 +108,8 @@ class ReflectionService:
                 research_plan=research_plan,
                 risk_verdict=risk_verdict,
                 debate_summary=debate_summary,
+                autonomous_plan=autonomous_plan,
+                autonomous_step_reasoning=autonomous_step_reasoning,
             )
         except Exception as exc:
             logger.warning("[Reflection] failed to record decision: %s", exc)

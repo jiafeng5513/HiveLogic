@@ -38,6 +38,8 @@ class ReflectionRepository:
         research_plan: Optional[dict] = None,
         risk_verdict: Optional[dict] = None,
         debate_summary: Optional[dict] = None,
+        autonomous_plan: Optional[dict] = None,
+        autonomous_step_reasoning: Optional[dict] = None,
     ) -> int:
         """记录一条新的决策日志，返回 ID。"""
         with self._session_factory() as session:
@@ -51,6 +53,8 @@ class ReflectionRepository:
                 research_plan_json=json.dumps(research_plan, ensure_ascii=False) if research_plan else None,
                 risk_verdict_json=json.dumps(risk_verdict, ensure_ascii=False) if risk_verdict else None,
                 debate_summary_json=json.dumps(debate_summary, ensure_ascii=False) if debate_summary else None,
+                autonomous_plan_json=json.dumps(autonomous_plan, ensure_ascii=False) if autonomous_plan else None,
+                autonomous_step_reasoning_json=json.dumps(autonomous_step_reasoning, ensure_ascii=False) if autonomous_step_reasoning else None,
             )
             session.add(log)
             session.commit()
