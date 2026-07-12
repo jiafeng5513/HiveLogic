@@ -165,7 +165,7 @@ export function useChat(options: UseChatOptions = {}) {
   }
 
   // ==================== 发送消息 ====================
-  function sendMessage(text: string, opts?: { mode?: ChatMode; agentId?: string; symbol?: string }) {
+  function sendMessage(text: string, opts?: { mode?: ChatMode; agentId?: string; symbol?: string; images?: string[] }) {
     const mode = opts?.mode || currentMode.value
     if (!allowedModes.includes(mode)) return
 
@@ -175,7 +175,8 @@ export function useChat(options: UseChatOptions = {}) {
       role: 'user',
       content: text,
       timestamp: Date.now(),
-      mode
+      mode,
+      images: opts?.images
     }
     messages.value.push(userMsg)
 
@@ -186,7 +187,8 @@ export function useChat(options: UseChatOptions = {}) {
       mode,
       skills: selectedSkills.value.length > 0 ? selectedSkills.value : undefined,
       agent_id: opts?.agentId,
-      symbol: opts?.symbol
+      symbol: opts?.symbol,
+      images: opts?.images
     }
 
     // 发送 SSE 请求

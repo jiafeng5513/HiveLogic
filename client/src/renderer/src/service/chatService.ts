@@ -10,9 +10,11 @@
  * 4. 技能列表获取
  */
 
+import { getApiBase } from './serverConfig'
+
 // ==================== 类型定义 ====================
 
-export type ChatMode = 'quick' | 'deep' | 'plan'
+export type ChatMode = 'quick' | 'deep' | 'plan' | 'autonomous'
 
 export interface ChatMessage {
   id: string
@@ -20,6 +22,7 @@ export interface ChatMessage {
   content: string
   timestamp: number
   mode?: ChatMode
+  images?: string[] // 用户消息附带的图片 (data URL), 用于多模态展示
   metadata?: {
     thinking?: string
     tools?: ToolCallInfo[]
@@ -58,6 +61,27 @@ export interface RiskDebateInfo {
   perspectives: string[]
   content: Record<string, string>
   status: 'running' | 'completed'
+}
+
+export interface PlanStep {
+  step: number
+  objective: string
+  tools: string[]
+  expected_data?: string
+  priority: 'high' | 'medium' | 'low'
+}
+
+export interface InvestigationPlan {
+  investigation_steps: PlanStep[]
+  early_stop_conditions: string[]
+  deep_dive_triggers: string[]
+  estimated_steps: number
+}
+
+export interface StepReasoning {
+  step: number
+  phase: string  // "planning" | "execution"
+  content: string
 }
 
 export interface DashboardData {
@@ -112,6 +136,7 @@ export interface ChatRequest {
   skills?: string[]
   agent_id?: string
   symbol?: string
+  images?: string[] // 多模态图片 (data URL), 触发 VisionAgent
 }
 
 export interface SSEEvent {
@@ -121,11 +146,9 @@ export interface SSEEvent {
 
 // ==================== 配置 ====================
 
-const DSA_PORT = 8100
-const BASE_URL = `http://127.0.0.1:${DSA_PORT}`
-
+// 后端地址统一走 serverConfig（支持本地/远程模式切换），不再硬编码端口
 function getApiUrl(path: string): string {
-  return `${BASE_URL}${path}`
+  return `${getApiBase()}${path}`
 }
 
 // ==================== 健康检查 ====================
@@ -253,7 +276,8 @@ export function streamChat(request: ChatRequest, onEvent: SSECallback): StreamCo
     mode: request.mode || 'chat',
     skills: request.skills || [],
     agent_id: request.agent_id || undefined,
-    symbol: request.symbol || undefined
+    symbol: request.symbol || undefined,
+    images: request.images || undefined
   })
 
   // 使用 fetch + ReadableStream 解析 SSE (比 EventSource 更灵活，支持 POST)
