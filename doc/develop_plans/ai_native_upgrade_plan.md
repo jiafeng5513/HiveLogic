@@ -254,14 +254,14 @@ matplotlib，挂载只读数据卷）。沙箱容器无网络、无写权限、C
 
 ### 7.2 任务清单
 
-- [ ] **C.1 LLM 适配层支持多模态消息**
+- [x] **C.1 LLM 适配层支持多模态消息**
   - `llm_adapter.py`：`_convert_messages()` 支持 OpenAI vision 消息格式：
     `{"role":"user","content":[{"type":"text","text":"..."},{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]}`。
   - LiteLLM 自动转换为各 provider 格式（GLM-4V / Kimi / MiniMax 均支持）。
   - `model_tier.py`：新增 `VISION` tier，`get_model_for_agent` 支持 vision agent。
   - config 新增 `agent_vision_model`（默认 `glm/glm-4v` 或 `moonshot/moonshot-v1-8k-vision`）。
 
-- [ ] **C.2 图表工具**
+- [x] **C.2 图表工具**
   - 新增 `server/src/agent/tools/vision_tools.py`：
     - `capture_kline_chart`：服务端用 `matplotlib` 生成 K 线截图（含成交量、均线标注），
       返回 base64 PNG。复用 `klinecharts` 数据格式。
@@ -269,19 +269,19 @@ matplotlib，挂载只读数据卷）。沙箱容器无网络、无写权限、C
     - 截图可作为工具返回值，也可直接喂给 vision LLM 做"看图分析"。
   - autonomous 模式下，AI 可自主决定"我看一下 K 线图"→ 调 capture → 喂给自己（vision tier）。
 
-- [ ] **C.3 图像分析 Agent**
+- [x] **C.3 图像分析 Agent**
   - 新增 `server/src/agent/agents/vision_agent.py`：
     - 接收图片 + 问题，用 VISION tier 模型分析。
     - 用途 1：用户贴图问"这个形态怎么看"。
     - 用途 2：被 autonomous planner 调用，对生成的 K 线图做形态确认。
   - 注册为可被 orchestrator 插入的 specialist agent（类似 skill agent）。
 
-- [ ] **C.4 前端支持图片输入**
+- [x] **C.4 前端支持图片输入**
   - StockAnalysis.vue / AgentWindow 对话框：支持粘贴图片、拖拽上传、截图粘贴。
   - 图片转 base64，随消息发送到后端（`/api/v1/agent/chat` 增加 `images` 字段）。
   - 分析结果中的 AI 生成图表（Phase B 产出）在 dashboard 内联展示。
 
-- [ ] **C.5 财报/公告 OCR 增强**
+- [x] **C.5 财报/公告 OCR 增强**
   - `vision_agent` 支持识别用户上传的财报截图、公告图片，提取关键数据。
   - 与 `news_service` 结合：爬取的公告若为 PDF/图片，转图喂 vision 提取要点。
 
