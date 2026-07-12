@@ -47,6 +47,7 @@ _THINKING_TOOL_LABELS: Dict[str, str] = {
     "get_skill_backtest_summary": "技能回测概览",
     "get_strategy_backtest_summary": "策略回测概览",
     "get_stock_backtest_summary": "个股回测数据",
+    "execute_python": "Python代码执行",
 }
 
 
@@ -368,6 +369,7 @@ def run_agent_loop(
     max_wall_clock_seconds: Optional[float] = None,
     tool_call_timeout_seconds: Optional[float] = None,
     agent_name: Optional[str] = None,
+    allow_approval_required: bool = False,
 ) -> RunLoopResult:
     """Execute the ReAct LLM ↔ tool loop.
 
@@ -385,13 +387,17 @@ def run_agent_loop(
         thinking_labels: Override map of tool_name → friendly label.
         max_wall_clock_seconds: Optional overall timeout budget for the loop.
         tool_call_timeout_seconds: Optional timeout for one parallel tool batch.
+        agent_name: Optional tier-routing agent name (e.g. ``"autonomous_executor"``).
+        allow_approval_required: When False (secure default), tools with
+            ``requires_approval=True`` (e.g. code execution) are hidden from
+            the LLM. Autonomous mode passes True to expose the full toolset.
 
     Returns:
         A :class:`RunLoopResult` with the final content, stats, and the
         (mutated) messages list.
     """
     labels = thinking_labels or _THINKING_TOOL_LABELS
-    tool_decls = tool_registry.to_openai_tools()
+    tool_decls = tool_registry.to_openai_tools(allow_approval_required=allow_approval_required)
 
     start_time = time.time()
     tool_calls_log: List[Dict[str, Any]] = []
@@ -483,6 +489,16 @@ def run_agent_loop(
         model_for_usage = m or response.provider
         if model_for_usage and model_for_usage != "error" and response.usage:
             _persist_usage(response.usage, model_for_usage, call_type="agent")
+
+        # --- progress: step reasoning (reasoning models only, e.g. deepseek-reasoner) ---
+        # Emit the model's thinking chain so the frontend can display it.
+        # Backward-compatible: non-reasoning models return reasoning_content=None.
+        if progress_callback and getattr(response, "reasoning_content", None):
+            progress_callback({
+                "type": "step_reasoning",
+                "step": step + 1,
+                "content": response.reasoning_content,
+            })
 
         remaining_timeout = _remaining_timeout_seconds(start_time, max_wall_clock_seconds)
         if remaining_timeout is not None and remaining_timeout <= 0:

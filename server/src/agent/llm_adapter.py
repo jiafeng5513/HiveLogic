@@ -373,12 +373,20 @@ class LLMToolAdapter:
         根据模型层级返回对应的模型名。
 
         优先级:
-        1. config 中专用 tier 模型 (agent_deep_think_model / agent_quick_think_model)
+        1. config 中专用 tier 模型 (agent_reasoning_model / agent_deep_think_model / agent_quick_think_model)
         2. 回退到 agent_litellm_model (单模型兼容)
         3. 回退到全局 LITELLM_MODEL
         """
         config = self._config
-        if tier == ModelTier.DEEP:
+        if tier == ModelTier.REASONING:
+            model = config.agent_reasoning_model
+            if model:
+                return model
+            # reasoning 未配置时回退到 deep_think
+            model = config.agent_deep_think_model
+            if model:
+                return model
+        elif tier == ModelTier.DEEP:
             model = config.agent_deep_think_model
             if model:
                 return model
