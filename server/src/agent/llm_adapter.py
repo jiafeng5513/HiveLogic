@@ -373,9 +373,13 @@ class LLMToolAdapter:
         根据模型层级返回对应的模型名。
 
         优先级:
-        1. config 中专用 tier 模型 (agent_reasoning_model / agent_deep_think_model / agent_quick_think_model)
+        1. config 中专用 tier 模型 (agent_reasoning_model / agent_deep_think_model /
+           agent_quick_think_model / agent_vision_model)
         2. 回退到 agent_litellm_model (单模型兼容)
         3. 回退到全局 LITELLM_MODEL
+
+        特殊: VISION tier 在未配置 agent_vision_model 时，会先尝试 config.vision_model
+        (全局视觉模型)，再回退到 agent primary。
         """
         config = self._config
         if tier == ModelTier.REASONING:
@@ -392,6 +396,14 @@ class LLMToolAdapter:
                 return model
         elif tier == ModelTier.QUICK:
             model = config.agent_quick_think_model
+            if model:
+                return model
+        elif tier == ModelTier.VISION:
+            model = config.agent_vision_model
+            if model:
+                return model
+            # vision 未配置时回退到全局 vision_model (VISION_MODEL env)
+            model = getattr(config, "vision_model", "")
             if model:
                 return model
 
@@ -530,7 +542,13 @@ class LLMToolAdapter:
         return self._config.llm_temperature
 
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Convert internal message format to OpenAI-compatible format for litellm."""
+        """Convert internal message format to OpenAI-compatible format for litellm.
+
+        Supports multimodal content: when ``msg["content"]`` is a list, each item
+        should be ``{"type": "text", "text": "..."}`` or
+        ``{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}``.
+        This is passed through as-is to litellm (OpenAI vision format).
+        """
         openai_messages: List[Dict[str, Any]] = []
         for msg in messages:
             if msg["role"] == "tool":
@@ -563,10 +581,20 @@ class LLMToolAdapter:
                     openai_msg["reasoning_content"] = msg["reasoning_content"]
                 openai_messages.append(openai_msg)
             else:
-                openai_messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"],
-                })
+                content = msg["content"]
+                if isinstance(content, list):
+                    # Multimodal content (OpenAI vision format):
+                    # [{"type": "text", "text": "..."},
+                    #  {"type": "image_url", "image_url": {"url": "data:..."}}]
+                    openai_messages.append({
+                        "role": msg["role"],
+                        "content": content,
+                    })
+                else:
+                    openai_messages.append({
+                        "role": msg["role"],
+                        "content": content,
+                    })
         return openai_messages
 
     def _parse_litellm_response(self, response: Any, model: str) -> LLMResponse:

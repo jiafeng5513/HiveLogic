@@ -538,6 +538,7 @@ class Config:
     agent_deep_think_model: str = ""  # 深度推理模型 (decision/risk agent); empty falls back to agent_litellm_model
     agent_quick_think_model: str = ""  # 快速模型 (technical/intel agent); empty falls back to agent_litellm_model
     agent_reasoning_model: str = ""  # 推理模型 (autonomous planner 规划步骤); empty falls back to agent_deep_think_model
+    agent_vision_model: str = ""  # 多模态视觉模型 (vision agent 图像理解); empty falls back to vision_model → agent primary
     agent_model_assignment: str = ""  # JSON dict override: {"agent_name": "deep_think|quick_think"}
     agent_mode: bool = False
     _agent_mode_explicit: bool = False  # True when AGENT_MODE was explicitly set in env
@@ -1067,6 +1068,7 @@ class Config:
         agent_deep_think_model = os.getenv('AGENT_DEEP_THINK_MODEL', '')
         agent_quick_think_model = os.getenv('AGENT_QUICK_THINK_MODEL', '')
         agent_reasoning_model = os.getenv('AGENT_REASONING_MODEL', '')
+        agent_vision_model = os.getenv('AGENT_VISION_MODEL', '')
         agent_model_assignment = os.getenv('AGENT_MODEL_ASSIGNMENT', '')
 
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
@@ -1235,6 +1237,7 @@ class Config:
             agent_deep_think_model=agent_deep_think_model,
             agent_quick_think_model=agent_quick_think_model,
             agent_reasoning_model=agent_reasoning_model,
+            agent_vision_model=agent_vision_model,
             agent_model_assignment=agent_model_assignment,
             agent_mode=os.getenv('AGENT_MODE', 'false').lower() == 'true',
             _agent_mode_explicit=os.getenv('AGENT_MODE') is not None,
