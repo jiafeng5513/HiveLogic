@@ -16,7 +16,7 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from api.v1.schemas.market import (
     MarketTypesResponse,
@@ -41,6 +41,7 @@ from api.v1.schemas.market import (
 )
 from src.services.market_gateway import MarketGateway
 from src.services.watchlist import WatchlistService
+from src.services.entitlement import enforce_data_request, record_api_usage
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +94,12 @@ def get_market_types():
     description="获取指定市场类型的标的列表。首次请求会从数据源拉取并缓存，后续请求读取缓存",
 )
 def get_symbols(
+    request: Request,
     type: str = Query(..., description="市场类型: crypto, cn_stock, cn_etf, cn_futures"),
     refresh: bool = Query(False, description="是否强制刷新缓存"),
 ):
     """获取指定市场类型的标的列表"""
+    enforce_data_request(request, market_type=type)
     gateway = _get_gateway()
     raw_symbols = gateway.get_symbols(type, force_refresh=refresh)
 
@@ -211,6 +214,7 @@ def search_symbols(
     description="获取指定标的的 K 线数据，兼容 TradingView UDF 格式。时间戳为 Unix 秒",
 )
 def get_kline(
+    request: Request,
     symbol: str = Query(..., description="标的代码 (如 600519, BTC/USDT)"),
     type: str = Query("", description="市场类型 (可选, 自动推断)"),
     period: str = Query("1d", description="K 线周期: 1/5/15/30/60/1h/4h/1d/1w/1M"),
@@ -223,6 +227,11 @@ def get_kline(
 
     # 推断市场类型
     market_type = type if type else MarketGateway._guess_market_type(symbol)
+
+    # 订阅等级准入：市场 + 周期 + 历史深度（鉴权关闭时自动跳过）
+    import time as _time
+    history_days = int((_time.time() - start) / 86400) if start > 0 else None
+    enforce_data_request(request, market_type=market_type, period=period, history_days=history_days)
 
     bars, no_data = gateway.get_kline(
         symbol=symbol,
@@ -246,6 +255,8 @@ def get_kline(
         for b in bars
     ]
 
+    record_api_usage(request, endpoint="/market/kline", method="GET", market=market_type)
+
     return KLineResponse(
         symbol=symbol,
         period=period,
@@ -263,10 +274,12 @@ def get_kline(
     description="获取一组标的的实时行情数据",
 )
 def get_realtime(
+    request: Request,
     symbols: str = Query(..., description="标的代码列表 (逗号分隔, 如 600519,000001)"),
     type: str = Query("", description="市场类型 (可选, 自动推断)"),
 ):
     """获取批量实时行情"""
+    enforce_data_request(request, market_type=type)
     gateway = _get_gateway()
 
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
@@ -438,6 +451,7 @@ def get_financials(
     description="获取标的浏览器所需的批量行情+估值数据，支持排序和筛选",
 )
 def get_browser_data(
+    request: Request,
     type: str = Query("crypto", description="市场类型: crypto, cn_stock, hk_stock, us_stock"),
     sort: str = Query("", description="排序: field:asc/desc (如 total_mv:desc)"),
     filter: str = Query("", description="筛选: field>value,field<value"),
@@ -447,6 +461,7 @@ def get_browser_data(
     """标的浏览器批量数据接口"""
     from datetime import datetime
 
+    enforce_data_request(request, market_type=type)
     gateway = _get_gateway()
 
     # 获取标的列表

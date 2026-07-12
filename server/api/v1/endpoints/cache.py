@@ -16,7 +16,7 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.services.kline_cache_manager import get_kline_cache_manager
@@ -250,16 +250,20 @@ class MarketDownloadRequest(BaseModel):
 
 
 @router.get("/symbols/{market}")
-async def get_market_symbols(market: str):
+async def get_market_symbols(
+    market: str,
+    refresh: bool = Query(False, description="是否强制刷新缓存（跳过内存+DB缓存，从数据源重新拉取）"),
+):
     """
     获取指定市场的全部可下载品种列表。
 
-    用于前端预览品种数量和列表。
+    读取顺序：内存缓存 → DB 缓存 → 外部数据源。
+    refresh=true 时强制从数据源拉取并回写缓存。
     """
     try:
         from src.services.symbol_list_service import get_symbol_list_service
         service = get_symbol_list_service()
-        symbols = service.get_symbols(market)
+        symbols = service.get_symbols(market, force_refresh=refresh)
         return {
             "market": market,
             "count": len(symbols),
@@ -357,4 +361,91 @@ async def get_all_batches():
         return {"batches": batches}
     except Exception as e:
         logger.error(f"[CacheAPI] 获取批次列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/metrics")
+async def get_cache_metrics():
+    """获取 K 线缓存命中率指标"""
+    try:
+        from src.services.market_gateway import MarketGateway
+        gateway = MarketGateway()
+        return gateway.get_cache_metrics()
+    except Exception as e:
+        logger.error(f"[CacheAPI] 获取缓存指标失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/disk-usage")
+async def get_disk_usage():
+    """获取磁盘使用统计"""
+    try:
+        from src.services.cache_maintenance import get_cache_maintenance
+        maintenance = get_cache_maintenance()
+        return maintenance.get_disk_usage()
+    except Exception as e:
+        logger.error(f"[CacheAPI] 获取磁盘使用统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/maintenance")
+async def run_cache_maintenance():
+    """触发缓存维护（清理过期数据 + VACUUM）"""
+    try:
+        from src.services.cache_maintenance import get_cache_maintenance
+        maintenance = get_cache_maintenance()
+        return maintenance.run_full_cleanup()
+    except Exception as e:
+        logger.error(f"[CacheAPI] 缓存维护失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/snapshot/{market}")
+async def get_market_snapshot(market: str):
+    """获取指定市场的最新行情快照（L0）"""
+    try:
+        from src.services.market_collector import get_market_collector
+        collector = get_market_collector()
+        snapshots = collector.get_market_snapshots(market)
+        return {"market": market, "count": len(snapshots), "snapshots": snapshots}
+    except Exception as e:
+        logger.error(f"[CacheAPI] 获取快照失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/collector/status")
+async def get_collector_status():
+    """获取市场采集器状态"""
+    try:
+        from src.services.market_collector import get_market_collector
+        collector = get_market_collector()
+        return collector.get_status()
+    except Exception as e:
+        logger.error(f"[CacheAPI] 获取采集器状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/scheduler/status")
+async def get_scheduler_status(request: Request):
+    """获取调度任务状态"""
+    try:
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler is None:
+            return {"tasks": [], "note": "调度器未启动"}
+        return {"tasks": scheduler.get_task_status()}
+    except Exception as e:
+        logger.error(f"[CacheAPI] 获取调度状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/collector/collect")
+async def trigger_collection():
+    """手动触发全市场快照采集"""
+    try:
+        from src.services.market_collector import get_market_collector
+        collector = get_market_collector()
+        results = collector.collect_all()
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"[CacheAPI] 手动采集失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

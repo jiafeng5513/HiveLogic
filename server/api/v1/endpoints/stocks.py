@@ -35,8 +35,18 @@ from src.services.import_parser import (
     parse_import_from_text,
 )
 from src.services.stock_service import StockService
+from src.services.entitlement import enforce_data_request, record_api_usage
 
 logger = logging.getLogger(__name__)
+
+
+def _guess_market(stock_code: str) -> Optional[str]:
+    """根据股票代码推断市场类型（供订阅等级准入使用）。"""
+    try:
+        from src.services.market_gateway import MarketGateway
+        return MarketGateway._guess_market_type(stock_code)
+    except Exception:
+        return None
 
 router = APIRouter()
 
@@ -250,7 +260,7 @@ async def parse_import(request: Request) -> ExtractFromImageResponse:
     summary="获取股票实时行情",
     description="获取指定股票的最新行情数据"
 )
-def get_stock_quote(stock_code: str) -> StockQuote:
+def get_stock_quote(stock_code: str, request: Request) -> StockQuote:
     """
     获取股票实时行情
     
@@ -265,6 +275,7 @@ def get_stock_quote(stock_code: str) -> StockQuote:
     Raises:
         HTTPException: 404 - 股票不存在
     """
+    enforce_data_request(request, market_type=_guess_market(stock_code))
     try:
         service = StockService()
         
@@ -321,6 +332,7 @@ def get_stock_quote(stock_code: str) -> StockQuote:
 )
 def get_stock_history(
     stock_code: str,
+    request: Request,
     period: str = Query("daily", description="K 线周期", pattern="^(daily|weekly|monthly)$"),
     days: int = Query(30, ge=1, le=365, description="获取天数")
 ) -> StockHistoryResponse:
@@ -337,6 +349,9 @@ def get_stock_history(
     Returns:
         StockHistoryResponse: 历史行情数据
     """
+    enforce_data_request(
+        request, market_type=_guess_market(stock_code), period=period, history_days=days
+    )
     try:
         service = StockService()
         
