@@ -34,6 +34,7 @@ TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "get_skill_backtest_summary": "获取技能回测概览",
     "get_strategy_backtest_summary": "获取策略回测概览",
     "get_stock_backtest_summary": "获取个股回测数据",
+    "execute_python":             "执行Python代码",
 }
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ class ChatRequest(BaseModel):
 
     message: str
     session_id: Optional[str] = None
-    mode: Optional[str] = None  # chat/quick/deep/plan (legacy: standard/full/specialist also accepted)
+    mode: Optional[str] = None  # quick/deep/autonomous (legacy: chat/standard/full/specialist/plan also accepted)
     agent_id: Optional[str] = None  # 单 Agent 模式指定 agent
     symbol: Optional[str] = None  # 标的代码
     skills: Optional[List[str]] = Field(
@@ -53,6 +54,7 @@ class ChatRequest(BaseModel):
         validation_alias=AliasChoices("skills", "strategies"),
     )
     context: Optional[Dict[str, Any]] = None  # Previous analysis context for data reuse
+    images: Optional[List[str]] = None  # 多模态图片列表 (data URL 或 base64 编码), 触发 VisionAgent
 
     @property
     def effective_skills(self) -> Optional[List[str]]:
@@ -416,6 +418,8 @@ async def agent_chat_stream(request: ChatRequest):
         stream_ctx["symbol"] = request.symbol
     if request.agent_id:
         stream_ctx["agent_id"] = request.agent_id
+    if request.images:
+        stream_ctx["images"] = request.images
 
     def progress_callback(event: dict):
         # Enrich tool events with display names
