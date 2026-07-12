@@ -711,36 +711,57 @@ class AgentOrchestrator:
             return [technical, intel, decision]
 
     def _build_specialist_agents(self, ctx: AgentContext) -> list:
-        """Build specialist sub-agents based on requested skills.
+        """Build specialist sub-agents based on requested skills + vision.
 
-        Uses the skill router to select applicable skills, then creates
-        lightweight agent wrappers for each.
+        Specialist agents are inserted right before the decision stage:
+        1. Skill agents — selected by SkillRouter based on the market context
+        2. Vision agent — inserted when user-uploaded images are present in
+           ``ctx.meta["images"]`` (Phase C.3 multimodal support)
         """
+        common_kwargs = dict(
+            tool_registry=self.tool_registry,
+            llm_adapter=self.llm_adapter,
+            skill_instructions=self.skill_instructions,
+            technical_skill_policy=self.technical_skill_policy,
+        )
+
+        agents: list = []
+
+        # --- Skill agents (existing behavior) ---
         try:
             from src.agent.skills.router import SkillRouter
-            common_kwargs = dict(
-                tool_registry=self.tool_registry,
-                llm_adapter=self.llm_adapter,
-                skill_instructions=self.skill_instructions,
-                technical_skill_policy=self.technical_skill_policy,
-            )
             router = SkillRouter()
             selected = router.select_skills(ctx)
-            if not selected:
-                return []
-
-            from src.agent.skills.skill_agent import SkillAgent
-            agents = []
-            for skill_id in selected[:3]:  # cap at 3 concurrent skills
-                agent = self._prepare_agent(SkillAgent(
-                    skill_id=skill_id,
-                    **common_kwargs,
-                ))
-                agents.append(agent)
-            return agents
+            if selected:
+                from src.agent.skills.skill_agent import SkillAgent
+                for skill_id in selected[:3]:  # cap at 3 concurrent skills
+                    agent = self._prepare_agent(SkillAgent(
+                        skill_id=skill_id,
+                        **common_kwargs,
+                    ))
+                    agents.append(agent)
         except Exception as exc:
             logger.warning("[Orchestrator] failed to build skill agents: %s", exc)
-            return []
+
+        # --- Vision agent (Phase C.3) ---
+        # Insert when user-uploaded images are present. The vision agent
+        # will also auto-capture a K-line chart when ctx.stock_code is set
+        # but no images are provided — so we insert it whenever images
+        # exist OR the user explicitly requested vision analysis.
+        images = ctx.meta.get("images")
+        if isinstance(images, list) and images:
+            try:
+                from src.agent.agents.vision_agent import VisionAgent
+                vision_agent = self._prepare_agent(VisionAgent(**common_kwargs))
+                agents.append(vision_agent)
+                logger.info(
+                    "[Orchestrator] VisionAgent inserted as specialist (%d images)",
+                    len(images),
+                )
+            except Exception as exc:
+                logger.warning("[Orchestrator] failed to build vision agent: %s", exc)
+
+        return agents
 
     def _build_skill_agents(self, ctx: AgentContext) -> list:
         """Compatibility wrapper for legacy imports."""
