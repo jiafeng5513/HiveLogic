@@ -14,7 +14,9 @@ dojoagents_reference_analysis.md        【L0 出发点】DojoAgents 借鉴分�
 │   └─ 00_data_inventory.md             【L1 盘点】HiveLogic 数据现状盘点
 │       │                               （行情 fetcher / 故障转移 / 持久化 / 新闻管线）
 │       ├─ 01_market_data_gateway_plan.md    【L2 计划】行情数据收敛（统一数据网关）
-│       └─ 02_news_pipeline_refactor_plan.md 【L2 计划】新闻/搜索管线重构
+│       ├─ 02_news_pipeline_refactor_plan.md 【L2 计划】新闻/搜索管线重构
+│       ├─ 03_data_asset_plan.md             【L2 计划】数据资产化：板块分类/预计算/持久化与主数据治理
+│       └─ 04_deployment_topology_plan.md    【L2 计划】部署拓扑：个人服务器化（7×24 数据底座）
 │
 ├─【Agent 方向】待展开（见分析文档第十节待办：Agent Loop / Harness / 多智能体）
 │
@@ -25,7 +27,7 @@ dojoagents_reference_analysis.md        【L0 出发点】DojoAgents 借鉴分�
 
 | 方向 | 状态 | 现有文档 | 下一步 |
 |---|---|---|---|
-| 数据 | **已盘点，计划就绪** | 00（盘点）、01（行情）、02（新闻） | 启动 01 或 02 的 Phase 1；后续还有板块分类、每日预计算（分析文档 9.3 的阶段 3/4） |
+| 数据 | **已盘点，计划就绪** | 00（盘点）、01（行情）、02（新闻）、03（资产化）、04（部署拓扑） | 启动顺序见 03/04 的协同章节（01 P1-2 → 04 P0+P1 → 03 → 01 P3，02 可并行） |
 | Agent | 待展开 | — | Agent Loop 拆解、Harness 护栏落地、ConfigStore |
 | UI | 待展开 | — | SSE 流式协议、Agent 活动可视化 |
 
