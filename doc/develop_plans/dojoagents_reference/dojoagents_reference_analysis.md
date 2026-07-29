@@ -325,8 +325,11 @@ DojoAgents 仓库里**没有任何独家数据源**——K线、财报、新闻�
 
 ## 十、后续可深入方向（待讨论）
 
+> 2026-07-29 更新：**数据方向已展开**——现状盘点见 [00_data_inventory.md](./00_data_inventory.md)，细化计划见 [01_market_data_gateway_plan.md](./01_market_data_gateway_plan.md)（行情数据收敛）、[02_news_pipeline_refactor_plan.md](./02_news_pipeline_refactor_plan.md)（新闻/搜索管线重构）。Agent / UI 方向待展开。目录组织见 [README.md](./README.md)。
+
 - [x] ~~市场数据体系（数据来源/分类体系/热图计算链/涨跌榜链路/更新频率）~~ → 见第七节
 - [x] ~~板块页数据拆解（云端vs本地/实时尾巴/跨市场日历合并）~~ → 见第八节
+- [x] ~~数据方向现状盘点与细化计划~~ → 见 00 / 01 / 02 号文档
 - [ ] 详细拆解 Agent Loop 多轮工具调用流程（loop.py 全部 1523 行 + providers 桥接）
 - [ ] ConfigStore 完整实现细节（loader.py 的 env 展开 / redacted / deep_merge）
 - [ ] SSE 流式协议设计（dashboard 的 chat API 事件类型与前端 activitySteps 还原）

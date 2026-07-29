@@ -3,6 +3,8 @@
 > 盘点日期：2026-07-28
 > 范围：`server/data_provider/`、`server/src/services/`、`server/src/search_service.py`、`server/src/storage.py`
 > 用途：阶段 1（统一数据网关）设计的输入基线
+> 上游文档：[dojoagents_reference_analysis.md](./dojoagents_reference_analysis.md) 第九节（数据方向）
+> 衍生计划：[01_market_data_gateway_plan.md](./01_market_data_gateway_plan.md)（行情数据收敛）、[02_news_pipeline_refactor_plan.md](./02_news_pipeline_refactor_plan.md)（新闻/搜索管线重构）
 
 ---
 
