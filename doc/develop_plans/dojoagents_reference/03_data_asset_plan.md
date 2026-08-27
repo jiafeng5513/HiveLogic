@@ -99,7 +99,7 @@
 
 1. **P0 核实 `stock_analysis.db` 路径问题**：确认物理文件位置与 CWD 依赖；统一为绝对路径（基于 server 根目录解析），如有多处散落的 DB 文件做归并
 2. **统一 DB 访问层**：`market_cache.db` 的 6 处裸 sqlite3 收拢为单一访问模块（统一连接管理、WAL/PRAGMA、异常边界）；各模块改为调用访问层，不直接 `sqlite3.connect`
-3. **迁移纪律**：引入版本化迁移机制——轻量方案（`schema_migrations` 表 + 编号 SQL 脚本目录）或 alembic，二选一；现有三处手写 try-ALTER 迁移收编为初始版本记录
+3. **迁移纪律**：引入版本化迁移机制——轻量方案（`schema_migrations` 表 + 编号 SQL 脚本目录）或 alembic，二选一；现有三处手写 try-ALTER 迁移收编为初始版本记录。参考 DojoAgents 2026-08 的 `sessions/migration.py`：其 `SessionMigrator` 采用 dry-run + fingerprint + 幂等重跑策略迁移旧 strands 文件会话到 canonical store，HiveLogic 的迁移脚本可借鉴同样的"指纹判重 + 可重跑"纪律
 4. **SymbolMaster 单一权威**：
    - 合并 `symbol_cache` / `symbol_list` 为一张 symbol 主表（保留拼音、exchange、currency、status 字段）
    - name-to-code 三套映射统一为层级策略：**SymbolMaster（DB）→ 内存缓存 → 在线回落**；`stock_mapping.py` 硬编码迁移入库后删除；`stocks.index.json` 改为从 SymbolMaster 导出的 build 产物
@@ -116,7 +116,8 @@
    - `board`（板块主表）：board_code / name / type（行业/概念/地域）/ source / updated_at
    - `board_constituent`（成分表）：board_code × symbol × market，含权重/纳入日期，快照式存储
    - 分类标准：**东财行业 + 概念板块先行**（akshare 接口现成、覆盖 A股全市场），申万作为后续可选增补（接口需评估）——⚠️ 决策点 1
-2. **每日刷新任务**：收盘后全量拉取板块列表 + 成分，快照写入（保留历史，支持"T 日成分"查询）；增量校验（成分变动打 log，这是天然的事件信号源）
+   - **LLM 补洞机制（可选）**：对 akshare 未覆盖的新股/边缘标的，参考 DojoAgents `ticker-sector-classify` 任务，用 LLM 基于公司 profile 做 L3 映射（1 Primary + 0-2 Secondary），作为成分表缺失时的 fallback，而非替代主数据源
+2. **每日刷新任务**：收盘后全量拉取板块列表 + 成分，快照写入（保留历史，支持"T 日成分"查询）；增量校验（成分变动打 log，这是天然的事件信号源）；同时写入 SymbolMaster 的 ticker 规范格式（如 `600519.SS` / `0700.HK`），与 LLM 补洞任务的输入格式一致
 3. **消费方切换**：5 处消费方（pipeline / portfolio_risk / data_tools / efinance / data_processing）从实时 API 改为查本地表；`_normalize_belong_boards` 两份重复实现随之删除
 4. **板块级聚合指标**（为 Phase 3 供数据）：板块涨跌幅、涨跌家数、涨停数——先落表，供后续榜单/热图 UI 和 Agent 工具消费
 
@@ -130,7 +131,8 @@
 2. **显式编排**：collect → archive →（板块指标 compute）→ 形成任务 DAG，每步状态可观察（替代隐式顺序调用）；失败可单步重跑
 3. **parquet 产物**：每日预计算结果落 parquet 快照（`data/precompute/YYYY-MM-DD/*.parquet`）——与 01 Phase 4 的列式 POC 呼应，但本阶段只产出"预计算产物"，不动 K线存储引擎
 4. **validate→publish 纪律**：校验规则（行数/字段非空/涨跌幅合理区间）通过后标记 publish；消费方只读 published 快照
-5. **首批预计算产物**：板块日指标（涨幅/涨跌家数/涨停数/成交占比）、市场宽度（涨跌平家数、新高新低）、自选股日摘要
+5. **首批预计算产物**：板块日指标（涨幅/涨跌家数/涨停数/成交占比）、市场宽度（涨跌平家数、新高新低）、自选股日摘要；指标表至少包含 `index_level`、`daily_return_pct`、`total_market_cap`、`weighted_pe`、`member_count`，窗口收益采用复利 `daily_return_pct` 而非首尾 `index_level` 相除（参考 DojoAgents 2026-08 更新）
+6. **（可选增强）叙事/事件资产层**：在数值预计算稳定后，参考 DojoAgents 新增 `attribution-factor-crawl`（板块异动归因）、`sector-brief-extract`（板块主题简报）、`event-trigger`（市场主线事件），叠加 LLM 生成的结构化 narrative assets。这些产物同样按 `data/precompute/YYYY-MM-DD/` 分区，validate→publish 后只读；它们依赖 03 Phase 2 的板块纯度/leader 数据，应作为 Phase 3 完成后的增量能力
 
 **验收**：任务连续 N 日自动跑通（task_log 可证）；失败日 catch-up 补跑成功；parquet 产物 schema 稳定，Agent 工具/未来 UI 可离线读取。
 
@@ -148,7 +150,7 @@
 
 | # | 决策点 | 选项 | 我的建议 |
 |---|---|---|---|
-| 1 | 板块分类标准 | 东财行业+概念 / 申万 / 两者并存 | **东财行业+概念先行**（akshare 现成、全市场覆盖）；申万接口稳定性待评估，作后续增补 |
+| 1 | 板块分类标准 | 东财行业+概念 / 申万 / 两者并存 / +LLM 补洞 | **东财行业+概念先行**（akshare 现成、全市场覆盖）；申万接口稳定性待评估，作后续增补；对未覆盖标的可用 LLM 做 `ticker-sector-classify` 式 fallback，但不替代主数据源 |
 | 2 | 迁移机制 | 轻量编号 SQL 脚本 / alembic | **轻量编号脚本**——单机 SQLite 场景 alembic 过重，且 market_cache.db 是非 ORM 库 |
 | 3 | 板块快照保留 | 全量历史 / 窗口（如 2 年） | 成分表全量历史（行小），聚合指标窗口管理 |
 | 4 | 启动顺序 | 本计划 vs 01/02 的先后 | 见下节 |

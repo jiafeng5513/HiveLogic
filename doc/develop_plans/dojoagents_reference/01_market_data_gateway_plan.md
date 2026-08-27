@@ -133,7 +133,7 @@
 ### Phase 4：数据资产补强（P2 缺口，部分可选）
 
 1. **易失数据持久化**：实时缓存、WS CandleBuilder 的 1 分钟 K线落 SQLite/parquet，重启恢复（盘中重启不再归零）
-2. **L0 快照历史**：`market_snapshot` 改追加写或按日归档，保留时序
+2. **L0 快照历史**：`market_snapshot` 改追加写或按日归档，保留时序；在此基础上支持 `as_of` 历史窗口查询（参考 DojoAgents 的 `as_of=YYYY-MM-DD` 右边界裁剪模式）
 3. **`fundamental_snapshot` 打通读路径**：分析时先查快照再决定拉网（消除只写不读）
 4. **列式存储评估**：duckdb/parquet 作为分析/回测读取引擎的可行性验证（POC 先行，不直接迁移）
 
