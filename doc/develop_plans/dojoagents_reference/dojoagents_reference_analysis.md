@@ -147,7 +147,7 @@ Slack / Telegram / 微信 / 飞书各自一个适配器，统一 `GatewayEvent` 
 - **自有三级行业分类**（L1/L2/L3），中英双语，id 为不透明数字串（`id_scheme=sector_id`，如 153/160/161）
 - 分类体系由 **Dojo 远端数据平台定义维护**，经 `client.sectors.get_info(tree=True)` 下发；`sector_store` 本地缓存，`build_taxonomy_tree()`（`services/domain_api.py`）组装成树供前端与 agent 工具使用
 - 个股→板块归属同样来自远端：`sectors.get_symbol_relations()` 接口 + 预计算 constituents.parquet 中每股已带 level1/2/3 id
-- **仓库内无任何本地分类生成逻辑**（无 LLM 打标、无规则映射表）；`dojoagents/data/` 只有默认组合与 ticker 别名。分类是他们的核心数据资产，不在算法层
+- **分类主数据仍由远端维护**，但 2026-08 更新后新增了 `ticker-sector-classify` 任务作为覆盖缺口兜底：对未进入 constituents 的新股/边缘标的，用 LLM 基于公司 profile + web  corroboration 映射到 L1/L2/L3（1 Primary + 0-2 Secondary）。因此算法层**并非零分类逻辑**，而是“远端 taxonomy 为主 + LLM 补洞”的混合模式
 
 ### 7.3 板块热图数值计算链（以"家用电器及智能家居 +19.72%"为例）
 
@@ -225,6 +225,8 @@ GET /api/v1/market/sector-movers?days=5&limit=5&min_cap_cn=...
 | 小时级后台刷新循环 + 缓存全面失效机制 | ✅ 高 | `market_refresh_jobs.py` + `refresh_after_offline_data_update()` 结构简单有效 |
 
 **潜在改进点**（DojoAgents 未做）：日级预计算导致盘中热图/榜单定格在上一交易日。HiveLogic 可在快照之上叠加"当日实时报价修正层"（用实时 quote 算当日临时板块收益），实现盘中动态。
+
+> **2026-08 更新补充**：DojoAgents 在 2026-07-28 之后还新增了 `as_of` 历史窗口查询（板块窗口收益从首尾 `index_level` 相除改为复利 `daily_return_pct`）、归因因子爬取（`attribution-factor-crawl`）、板块简报提取（`sector-brief-extract`）以及事件触发器（`event-trigger`）单市场主线分析。这些都可视为在原有预计算层之上叠加的**结构化叙事资产层**，不影响 7.1-7.5 的底层数据链路判断，但应在 HiveLogic 数据资产化阶段作为可选增强项纳入。
 
 ---
 
