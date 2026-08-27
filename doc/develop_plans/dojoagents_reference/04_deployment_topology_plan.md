@@ -42,7 +42,7 @@
 | 2 | 客户端所有 API base URL 是否集中可配（UDF、REST、WS 各有几处硬编码 localhost） | 解绑的工作量清单 |
 | 3 | 现有 API 有无任何认证/鉴权中间件、CORS 配置现状 | 认证层从什么基础上加 |
 | 4 | `.env` 密钥的消费范围（哪些只服务端用、哪些泄漏到了客户端包） | 密钥回收清单 |
-| 5 | WS 实时推送（realtime_ws）对网络抖动的重连/补偿行为 | 远程客户端体验 |
+| 5 | SSE/WS 实时推送对网络抖动的重连/补偿行为；是否支持事件持久化 + 断点重放 | 远程客户端体验 |
 | 6 | 单用户假设的分布（watchlist/portfolio/settings/会话的存储与隔离方式） | 确认"个人服务器"不做多租户的边界 |
 
 ---
@@ -86,18 +86,19 @@
 ### Phase 1：解绑（核心一步，2-3 天）
 
 1. **服务器 headless 化**：FastAPI 脱离 Electron 独立运行的入口与配置（不依赖父进程生命周期）；日志/异常守护；`Dockerfile` + `docker-compose.yml`（含数据卷挂载 `data/`、时区 Asia/Shanghai、重启策略）
-2. **认证层**：API token 中间件（单 token 起步，不做用户体系）；全 API/WS 挂载；CORS 收敛为显式白名单
+2. **认证层**：API token 中间件（单 token 起步，不做用户体系）；全 API/WS 挂载；CORS 收敛为显式白名单。参考 DojoAgents 2026-08 的 `SessionPrincipal` 设计，在 token 校验后增加一个固定的 Principal Provider（如 `("default", "local")`），让所有存储/会话层天然带单用户作用域，既保留"个人服务器不做多租户"的边界，又为未来升级多 principal 预留一致接口
 3. **客户端解绑**：Electron 服务器地址可配置（设置项，默认 `http://localhost` 保持桌面一体模式）；token 存储（系统 keychain/安全存储，不明文）；所有 base URL 收敛为单一配置源（含 UDF/REST/WS）
 4. **TLS/暴露面**：局域网场景可 HTTP + token；公网场景必须 HTTPS——推荐反向代理（Caddy，自动证书）或 Tailscale 组网（**零公网暴露，个人服务器首选**，在文档中给出两种部署拓扑）
+5. **SSE 事件持久化与断点重放**：参考 DojoAgents 2026-08 的 `stream_persisted_run_events` + `SessionStore.read_offline_events`，把 Agent/分析流的 SSE 从"纯内存推送"改为"事件落库 + `after_seq` 游标重放"。远程客户端断线、浏览器刷新、服务器重启后都能从断点续接，直接解决 1.2 核实项 #5 的重连/补偿问题
 
-**验收**：服务器在 Linux 主机 Docker 独立跑起来；Electron 指向远程服务器全部功能正常（图表/分析/新闻/bot 命令）；无 token 请求一律 401；桌面一体模式（localhost）回归不破坏。
+**验收**：服务器在 Linux 主机 Docker 独立跑起来；Electron 指向远程服务器全部功能正常（图表/分析/新闻/bot 命令）；无 token 请求一律 401；SSE 断线 30 秒后重连不丢消息；桌面一体模式（localhost）回归不破坏。
 
 **风险**：中。主要是"漏改的 localhost 硬编码"——Phase 0 清单质量决定成败，改完全局 grep `localhost|127.0.0.1` 清零。
 
 ### Phase 2：常开化（1 天，与 01/02/03 协同）
 
 1. **全部定时任务归位服务器**：Scheduler（采集/归档/预计算/分析）、NewsCrawlScheduler、feed 层、bot 网关——桌面端不再承担任何采集职责，变为纯视图
-2. **数据连续性观测**：task_log + 新鲜度统计暴露为状态 API/页面（"服务器活着、数据在流"一目了然）；断档告警（如超过 N 小时无新快照 → bot 推送告警）
+2. **数据连续性观测**：task_log + 新鲜度统计暴露为状态 API/页面（"服务器活着、数据在流"一目了然）；断档告警（如超过 N 小时无新快照 → bot 推送告警）。参考 DojoAgents 的 `RefreshStateStore`（持久化 `last_refresh_date` + `market_data_revision`）和 `DashboardServiceHealth`，把"今日是否已刷新"作为 freshness 核心指标，避免每小时空转重复刷新
 3. **客户端冷启动体验**：打开桌面端即见热数据（服务器缓存命中），无需等待本地采集
 
 **验收**：桌面端关闭 72 小时，服务器数据无断档（kline/news/snapshot/预计算产物连续）；重开客户端数据即刻可见。

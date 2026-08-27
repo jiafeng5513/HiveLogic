@@ -232,7 +232,8 @@ Tushare news × 9 源（feed 层）            Serper（Google 数据）
 akshare × 4 接口（feed 层）               自建 SearXNG（零配额聚合兜底）
                                           ddgs（最后免费防线）
                 ↓ 统一 dedupe → news_item → 异步 LLM 加工 ↓
-```
+
+> 2026-08 更新：DojoAgents 的 `web_searcher.py` 已为 Tavily 同时实现 `search` 与 `extract` 后端，一个 `TAVILY_API_KEY` 可兼顾搜索和正文抽取。HiveLogic 在 §4.3 中把 Tavily 定位为“通用精准搜索”即可，同时可让 Tavily 承担部分正文抽取职责，与 Exa Contents API / trafilatura 并列作为 newspaper3k 的替代方案。
 
 ---
 
@@ -307,11 +308,12 @@ DojoAgents 的市场新闻方案是**不自己做搜索**——消费上游 Dojo
 
 具体借鉴三点：
 
-1. **`sector_impact` 纳入 LLM 加工输出**：参照 Dojo 的 `MarketDynamicsSectorImpact`（sector_id / sector_name / affected_markets / direction / reason），在 NewsProcessor 的加工产物中增加"板块影响"字段——这条新闻影响哪个板块、方向（利好/利空/分化）、理由是什么。`news_item` 增加 `sector_impacts` JSON 列（加工前为 NULL），IntelAgent/Bull·Bear 可直接消费做板块级推理
-2. **provider 注册表模式对齐**：`web_searcher.py` 用 `register_search_backend(name, adapter)` 注册后端，与 Phase 2 的 `providers/` 包同构——确认方向一致，无需改设计，但可在基类上补一个统一的 `register_provider()` 入口，让新增源不需要改编排代码
+1. **`sector_impact` 纳入 LLM 加工输出**：参照 Dojo 的 `MarketDynamicsSectorImpact`（sector_id / sector_name / affected_markets / direction / reason），在 NewsProcessor 的加工产物中增加"板块影响"字段——这条新闻影响哪个板块、方向（利好/利空/分化）、理由是什么。`news_item` 增加 `sector_impacts` JSON 列（加工前为 NULL），IntelAgent/Bull·Bear 可直接消费做板块级推理。2026-08 更新后，上游 `event-trigger` v4 的 `sector_impacts` 已扩展为 richer 形状（含 `window_1d/3d/5d`、`window_label`、`leader_concentration_tier`、`leader_name`、`leader_weight_pct`、`divergence_days`），HiveLogic v1 可先用经典 5 字段，后续按需升级到 richer schema
+2. **provider 注册表模式对齐**：`web_searcher.py` 用 `register_search_backend(name, adapter)` 注册后端，与 Phase 2 的 `providers/` 包同构——确认方向一致，无需改设计，但可在基类上补一个统一的 `register_provider()` 入口，让新增源不需要改编排代码。2026-08 更新后上游还新增了 `register_extract_backend`（正文抽取后端注册表），Tavily 一个 key 同时覆盖 search + extract，因此 `register_provider()` 应覆盖搜索与抽取两类后端
 3. **`web_extract` 的 SSRF 防护**：Dojo 抓正文前做 URL 安全校验（仅允许 http/https、拦 localhost/私有 IP/保留地址、拦含 `api_key|token|secret|sig` 等参数的 URL）。我们的 `fetch_url_content()` 目前**零校验**，Phase 2 改造正文抽取时必须补上同等防护（放 `search/` 包的公共工具中，爬管子系统复用）
+4. **（可选增强）事件合成层**：DojoAgents 2026-08 的 `event-trigger` v4 已不依赖上游事件流，而是直接用 `get_sector_movers`/`get_sector_return_curve`/`web_search` 做"单市场主线分析师"，产出 `market_event_triggers_{market}_{date}.jsonl`（含 `event_rank`、`confidence`、`driver_status`、多窗口证据）。HiveLogic 在 Phase 3 之后可考虑增加第二-stage **EventSynthesizer**：以 `news_item` + 03 的板块异动/纯度数据为输入，生成结构化市场主线事件；这会引入对 03 数据资产的依赖，应排在 03 Phase 2/3 之后或并行
 
-**验收**：IntelAgent/Bull·Bear 拿到的入库新闻带 summary/sentiment/importance；多源汇聚结果去重率可度量；爬虫重启后续采不重复入库（去重键兜底）。
+**验收**：IntelAgent/Bull·Bear 拿到的入库新闻带 summary/sentiment/importance；多源汇聚结果去重率可度量；爬虫重启后续采不重复入库（去重键兜底）。EventSynthesizer 如纳入，需单独验收事件 rank 与板块纯度数据一致性。
 
 ---
 
