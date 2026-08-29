@@ -29,9 +29,8 @@ from typing import Optional, Dict, Any
 
 import pandas as pd
 
-from .base import BaseFetcher, STANDARD_COLUMNS
+from .base import BaseFetcher, STANDARD_COLUMNS, _is_us_market
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float
-from .us_index_mapping import is_us_stock_code, is_us_index_code
 
 logger = logging.getLogger(__name__)
 
@@ -200,11 +199,6 @@ def _longbridge_config_kwargs() -> Dict[str, Any]:
     return kw
 
 
-def _is_us_code(stock_code: str) -> bool:
-    normalized = stock_code.strip().upper()
-    return is_us_stock_code(normalized) or is_us_index_code(normalized)
-
-
 def _is_hk_code(stock_code: str) -> bool:
     normalized = (stock_code or "").strip().upper()
     if normalized.startswith("HK"):
@@ -233,7 +227,7 @@ def _to_longbridge_symbol(stock_code: str) -> Optional[str]:
     if upper.endswith(".HK"):
         return upper
 
-    if _is_us_code(code):
+    if _is_us_market(code):
         return f"{upper}.US"
 
     if _is_hk_code(code):

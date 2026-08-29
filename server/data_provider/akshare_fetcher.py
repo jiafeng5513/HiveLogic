@@ -43,7 +43,7 @@ from tenacity import (
 
 from patch.eastmoney_patch import eastmoney_patch
 from src.config import get_config
-from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS, is_bse_code, is_st_stock, is_kc_cy_stock, normalize_stock_code
+from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS, is_bse_code, is_st_stock, is_kc_cy_stock, normalize_stock_code, _is_hk_market
 from .realtime_types import (
     UnifiedRealtimeQuote, ChipDistribution, RealtimeSource,
     get_realtime_circuit_breaker, get_chip_circuit_breaker,
@@ -110,71 +110,16 @@ def _is_etf_code(stock_code: str) -> bool:
     return code.startswith(etf_prefixes) and len(code) == 6
 
 
-def _is_hk_code(stock_code: str) -> bool:
-    """
-    判断代码是否为港股
-
-    港股代码规则：
-    - 5位数字代码，如 '00700' (腾讯控股)
-    - 部分港股代码可能带有前缀，如 'hk00700', 'hk1810'
-
-    Args:
-        stock_code: 股票代码
-
-    Returns:
-        True 表示是港股代码，False 表示不是港股代码
-    """
-    # 去除可能的 'hk' 前缀并检查是否为纯数字
-    code = stock_code.strip().lower()
-    if code.endswith('.hk'):
-        numeric_part = code[:-3]
-        return numeric_part.isdigit() and 1 <= len(numeric_part) <= 5
-    if code.startswith('hk'):
-        # 带 hk 前缀的一定是港股，去掉前缀后应为纯数字（1-5位）
-        numeric_part = code[2:]
-        return numeric_part.isdigit() and 1 <= len(numeric_part) <= 5
-    # 无前缀时，5位纯数字才视为港股（避免误判 A 股代码）
-    return code.isdigit() and len(code) == 5
+# 港股代码判定：统一收敛到 base 模块的 canonical 实现（_is_hk_market）。
+# 保留 is_hk_stock_code 名称作为别名，以兼容 data_provider/__init__.py
+# 及 src/core/trading_calendar.py 的既有导入。
+is_hk_stock_code = _is_hk_market
 
 
-def is_hk_stock_code(stock_code: str) -> bool:
-    """
-    Public API: determine if a stock code is a Hong Kong stock.
-
-    Delegates to _is_hk_code for internal compatibility.
-
-    Args:
-        stock_code: Stock code (e.g. '00700', 'hk00700')
-
-    Returns:
-        True if HK stock, False otherwise
-    """
-    return _is_hk_code(stock_code)
-
-
-def _is_us_code(stock_code: str) -> bool:
-    """
-    判断代码是否为美股股票（不包括美股指数）。
-
-    委托给 us_index_mapping 模块的 is_us_stock_code()。
-
-    Args:
-        stock_code: 股票代码
-
-    Returns:
-        True 表示是美股代码，False 表示不是美股代码
-
-    Examples:
-        >>> _is_us_code('AAPL')
-        True
-        >>> _is_us_code('TSLA')
-        True
-        >>> _is_us_code('SPX')
-        False
-        >>> _is_us_code('600519')
-        False
-    """
-    return is_us_stock_code(stock_code)
+# 美股股票判定（不含美股指数）：委托给 us_index_mapping 模块的单一实现。
+# 保留 _is_us_code 别名，以兼容 base.py 中的延迟导入
+# （from .akshare_fetcher import _is_us_code）。
+_is_us_code = is_us_stock_code
 
 
 def _to_sina_tx_symbol(stock_code: str) -> str:
@@ -343,13 +288,13 @@ class AkshareFetcher(BaseFetcher):
         5. 处理返回数据
         """
         # 根据代码类型选择不同的获取方法
-        if _is_us_code(stock_code):
+        if is_us_stock_code(stock_code):
             # 美股：akshare 的 stock_us_daily 接口复权存在已知问题（参见 Issue #311）
             # 交由 YfinanceFetcher 处理，确保复权价格一致
             raise DataFetchError(
                 f"AkshareFetcher 不支持美股 {stock_code}，请使用 YfinanceFetcher 获取正确的复权价格"
             )
-        elif _is_hk_code(stock_code):
+        elif _is_hk_market(stock_code):
             return self._fetch_hk_data(stock_code, start_date, end_date)
         elif _is_etf_code(stock_code):
             return self._fetch_etf_data(stock_code, start_date, end_date)
@@ -797,11 +742,11 @@ class AkshareFetcher(BaseFetcher):
         circuit_breaker = get_realtime_circuit_breaker()
 
         # 根据代码类型选择不同的获取方法
-        if _is_us_code(stock_code):
+        if is_us_stock_code(stock_code):
             # 美股不使用 Akshare，由 YfinanceFetcher 处理
             logger.debug(f"[API跳过] {stock_code} 是美股，Akshare 不支持美股实时行情")
             return None
-        elif _is_hk_code(stock_code):
+        elif _is_hk_market(stock_code):
             return self._get_hk_realtime_quote(stock_code)
         elif _is_etf_code(stock_code):
             source_key = "akshare_etf"
@@ -1461,12 +1406,12 @@ class AkshareFetcher(BaseFetcher):
         import akshare as ak
 
         # 美股没有筹码分布数据（Akshare 不支持）
-        if _is_us_code(stock_code):
+        if is_us_stock_code(stock_code):
             logger.debug(f"[API跳过] {stock_code} 是美股，无筹码分布数据")
             return None
 
         # 港股没有筹码分布数据（stock_cyq_em 是 A 股专属接口）
-        if _is_hk_code(stock_code):
+        if _is_hk_market(stock_code):
             logger.debug(f"[API跳过] {stock_code} 是港股，无筹码分布数据")
             return None
 

@@ -371,14 +371,6 @@ class YfinanceFetcher(BaseFetcher):
 
         return None
 
-    def _is_us_stock(self, stock_code: str) -> bool:
-        """
-        判断代码是否为美股股票（排除美股指数）。
-
-        委托给 us_index_mapping 模块的 is_us_stock_code()。
-        """
-        return is_us_stock_code(stock_code)
-
     def _get_us_stock_quote_from_stooq(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         """
         使用 Stooq 为美股实时行情提供免密钥兜底。
@@ -640,7 +632,7 @@ class YfinanceFetcher(BaseFetcher):
             )
 
         # 仅处理美股股票
-        if not self._is_us_stock(stock_code):
+        if not is_us_stock_code(stock_code):
             logger.debug(f"[Yfinance] {stock_code} 不是美股，跳过")
             return None
 
