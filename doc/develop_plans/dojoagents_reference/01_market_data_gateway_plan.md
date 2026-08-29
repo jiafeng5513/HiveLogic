@@ -1,7 +1,7 @@
 # 行情数据收敛计划（统一数据网关）
 
 > 创建日期：2026-07-29
-> 状态：决策已确认，待启动
+> 状态：**Phase 1 已完成**（2026-08-29：统一异常族 src/errors.py、能力矩阵 data_provider/capabilities.py、市场统计合并 data_provider/market_stats.py、规范化 data_provider/normalization.py；测试 353/353 全绿）；Phase 2 待启动
 > 输入基线：[00_data_inventory.md](./00_data_inventory.md) 第一~三节（fetcher 清单/故障转移/持久化现状）
 > 姊妹计划：[02_news_pipeline_refactor_plan.md](./02_news_pipeline_refactor_plan.md)（新闻/搜索管线）
 > 性质：对应盘点文档"阶段 1（统一数据网关）"，工作性质是**收敛**，不是从零建设
