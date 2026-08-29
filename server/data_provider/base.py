@@ -26,6 +26,7 @@ import pandas as pd
 import numpy as np
 from src.data.stock_index_loader import get_index_stock_name
 from src.data.stock_mapping import STOCK_NAME_MAP, is_meaningful_stock_name
+from src.errors import GatewayError, RateLimitedError, SourceUnavailableError
 from .fundamental_adapter import AkshareFundamentalAdapter
 
 # 配置日志
@@ -222,19 +223,16 @@ def canonical_stock_code(code: str) -> str:
     return (code or "").strip().upper()
 
 
-class DataFetchError(Exception):
-    """数据获取异常基类"""
-    pass
+class DataFetchError(GatewayError):
+    """数据获取异常基类（兼容层：统一异常族 GatewayError 的本地基类）"""
 
 
-class RateLimitError(DataFetchError):
+class RateLimitError(DataFetchError, RateLimitedError):
     """API 速率限制异常"""
-    pass
 
 
-class DataSourceUnavailableError(DataFetchError):
+class DataSourceUnavailableError(DataFetchError, SourceUnavailableError):
     """数据源不可用异常"""
-    pass
 
 
 class BaseFetcher(ABC):
