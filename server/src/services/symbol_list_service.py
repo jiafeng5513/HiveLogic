@@ -301,11 +301,12 @@ class SymbolListService:
         """尝试通过 TushareFetcher 获取A股列表"""
         try:
             from data_provider.base import DataFetcherManager
+            from data_provider.capabilities import supports
             mgr = DataFetcherManager()
             fetchers = mgr._get_fetchers_snapshot()
 
             for f in fetchers:
-                if f.name == "TushareFetcher" and hasattr(f, "get_stock_list"):
+                if f.name == "TushareFetcher" and supports(f, "stock_list"):
                     df = f.get_stock_list()
                     if df is not None and not df.empty:
                         symbols = []
@@ -323,11 +324,12 @@ class SymbolListService:
         """尝试通过 BaostockFetcher 获取A股列表"""
         try:
             from data_provider.base import DataFetcherManager
+            from data_provider.capabilities import supports
             mgr = DataFetcherManager()
             fetchers = mgr._get_fetchers_snapshot()
 
             for f in fetchers:
-                if f.name == "BaostockFetcher" and hasattr(f, "get_stock_list"):
+                if f.name == "BaostockFetcher" and supports(f, "stock_list"):
                     df = f.get_stock_list()
                     if df is not None and not df.empty:
                         symbols = []
@@ -428,11 +430,12 @@ class SymbolListService:
         """尝试通过 TickFlowFetcher 获取品种列表"""
         try:
             from data_provider.base import DataFetcherManager
+            from data_provider.capabilities import supports
             mgr = DataFetcherManager()
             fetchers = mgr._get_fetchers_snapshot()
 
             for f in fetchers:
-                if f.name == "TickFlowFetcher" and hasattr(f, "get_symbol_list"):
+                if f.name == "TickFlowFetcher" and supports(f, "symbol_list"):
                     items = f.get_symbol_list(market_type)
                     if items:
                         symbols = []

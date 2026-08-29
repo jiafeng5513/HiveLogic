@@ -28,6 +28,7 @@ from src.data.stock_index_loader import get_index_stock_name
 from src.data.stock_mapping import STOCK_NAME_MAP, is_meaningful_stock_name
 from src.errors import GatewayError, RateLimitedError, SourceUnavailableError
 from .fundamental_adapter import AkshareFundamentalAdapter
+from .capabilities import supports
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -1348,7 +1349,7 @@ class DataFetcherManager:
                     # 尝试 EfinanceFetcher
                     for fetcher in self._get_fetchers_snapshot():
                         if fetcher.name == "EfinanceFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
+                            if supports(fetcher, 'realtime_quote'):
                                 quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code)
                             break
                 
@@ -1356,7 +1357,7 @@ class DataFetcherManager:
                     # 尝试 AkshareFetcher 东财数据源
                     for fetcher in self._get_fetchers_snapshot():
                         if fetcher.name == "AkshareFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
+                            if supports(fetcher, 'realtime_quote'):
                                 quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, source="em")
                             break
                 
@@ -1364,7 +1365,7 @@ class DataFetcherManager:
                     # 尝试 AkshareFetcher 新浪数据源
                     for fetcher in self._get_fetchers_snapshot():
                         if fetcher.name == "AkshareFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
+                            if supports(fetcher, 'realtime_quote'):
                                 quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, source="sina")
                             break
                 
@@ -1372,7 +1373,7 @@ class DataFetcherManager:
                     # 尝试 AkshareFetcher 腾讯数据源
                     for fetcher in self._get_fetchers_snapshot():
                         if fetcher.name == "AkshareFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
+                            if supports(fetcher, 'realtime_quote'):
                                 quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, source="tencent")
                             break
                 
@@ -1380,7 +1381,7 @@ class DataFetcherManager:
                     # 尝试 TushareFetcher（需要 Tushare Pro 积分）
                     for fetcher in self._get_fetchers_snapshot():
                         if fetcher.name == "TushareFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
+                            if supports(fetcher, 'realtime_quote'):
                                 quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', raw_stock_code or stock_code)
                             break
                 
@@ -1474,7 +1475,7 @@ class DataFetcherManager:
         for f in self._get_fetchers_snapshot():
             if f.name != fetcher_name:
                 continue
-            if not hasattr(f, 'get_realtime_quote'):
+            if not supports(f, 'realtime_quote'):
                 return None
             try:
                 q = self._call_fetcher_method(f, 'get_realtime_quote', stock_code, **kw)
@@ -1547,7 +1548,7 @@ class DataFetcherManager:
         # 直接遍历管理器已经按 priority 排好序的数据源列表
         for fetcher in self._get_fetchers_snapshot():
             # 只处理实现了筹码分布逻辑的数据源
-            if not hasattr(fetcher, 'get_chip_distribution'):
+            if not supports(fetcher, 'chip_distribution'):
                 continue
             
             fetcher_name = fetcher.name
@@ -1626,7 +1627,7 @@ class DataFetcherManager:
         is_us = _is_us_code(stock_code)
         _US_CAPABLE_FETCHERS = {"YfinanceFetcher", "LongbridgeFetcher"}
         for fetcher in self._get_fetchers_snapshot():
-            if not hasattr(fetcher, 'get_stock_name'):
+            if not supports(fetcher, 'stock_name'):
                 continue
             if is_us and fetcher.name not in _US_CAPABLE_FETCHERS:
                 continue
@@ -1654,7 +1655,7 @@ class DataFetcherManager:
         if _market_tag(stock_code) != "cn":
             return []
         for fetcher in self._fetchers:
-            if not hasattr(fetcher, "get_belong_board"):
+            if not supports(fetcher, "belong_board"):
                 continue
             try:
                 raw_data = fetcher.get_belong_board(stock_code)
@@ -1719,7 +1720,7 @@ class DataFetcherManager:
         
         # 2. 尝试批量获取股票列表
         for fetcher in self._get_fetchers_snapshot():
-            if hasattr(fetcher, 'get_stock_list') and missing_codes:
+            if supports(fetcher, 'stock_list') and missing_codes:
                 try:
                     stock_list = self._call_fetcher_method(fetcher, 'get_stock_list')
                     if stock_list is not None and not stock_list.empty:
@@ -2583,7 +2584,7 @@ class DataFetcherManager:
 
             # 直接遍历管理器已经按 priority 排好序的数据源列表
             for fetcher in self._fetchers:
-                if not hasattr(fetcher, 'get_sector_rankings'):
+                if not supports(fetcher, 'sector_rankings'):
                     continue
 
                 start = time.time()
