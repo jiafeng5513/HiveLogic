@@ -55,6 +55,7 @@ from patch.eastmoney_patch import eastmoney_patch
 from src.config import get_config
 from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS,is_bse_code, is_st_stock, is_kc_cy_stock, normalize_stock_code
 from .market_stats import calc_market_stats
+from .normalization import hands_to_shares
 from .realtime_types import (
     UnifiedRealtimeQuote, RealtimeSource,
     get_realtime_circuit_breaker,
@@ -560,6 +561,10 @@ class EfinanceFetcher(BaseFetcher):
         
         # 重命名列
         df = df.rename(columns=column_mapping)
+        
+        # 规范化：efinance（东财后端）A股/ETF 日K成交量单位为手，统一转换为股（见 normalization.py）
+        if 'volume' in df.columns:
+            df['volume'] = hands_to_shares(df['volume'])
         
         # Fallback: if OHLC columns are missing (e.g. very old data path), fill from close
         if 'close' in df.columns and 'open' not in df.columns:

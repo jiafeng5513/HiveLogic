@@ -32,6 +32,7 @@ from tenacity import (
 )
 
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code
+from .normalization import compute_pct_chg
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
 from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code
 
@@ -240,9 +241,9 @@ class YfinanceFetcher(BaseFetcher):
         df = df.rename(columns=column_mapping)
 
         # 计算涨跌幅（因为 yfinance 不直接提供）
+        # 规范化：本地计算首行保持 NaN，禁止 fillna(0)（见 normalization.py）
         if 'close' in df.columns:
-            df['pct_chg'] = df['close'].pct_change() * 100
-            df['pct_chg'] = df['pct_chg'].fillna(0).round(2)
+            df['pct_chg'] = compute_pct_chg(df['close']).round(2)
 
         # 计算成交额（yfinance 不提供，使用估算值）
         # 成交额 ≈ 成交量 * 平均价格

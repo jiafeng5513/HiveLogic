@@ -29,6 +29,7 @@ from tenacity import (
 )
 
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code, _is_hk_market
+from .normalization import compute_pct_chg
 import os
 
 logger = logging.getLogger(__name__)
@@ -346,9 +347,9 @@ class PytdxFetcher(BaseFetcher):
         df = df.rename(columns=column_mapping)
         
         # 计算涨跌幅（pytdx 不返回涨跌幅，需要自己计算）
+        # 规范化：本地计算首行保持 NaN，禁止 fillna(0)（见 normalization.py）
         if 'pct_chg' not in df.columns and 'close' in df.columns:
-            df['pct_chg'] = df['close'].pct_change() * 100
-            df['pct_chg'] = df['pct_chg'].fillna(0).round(2)
+            df['pct_chg'] = compute_pct_chg(df['close']).round(2)
         
         # 添加股票代码列
         df['code'] = stock_code

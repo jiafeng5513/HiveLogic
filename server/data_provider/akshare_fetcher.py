@@ -44,6 +44,7 @@ from tenacity import (
 from patch.eastmoney_patch import eastmoney_patch
 from src.config import get_config
 from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS, is_bse_code, is_st_stock, is_kc_cy_stock, normalize_stock_code, _is_hk_market
+from .normalization import compute_pct_chg, hands_to_shares
 from .market_stats import calc_market_stats
 from .realtime_types import (
     UnifiedRealtimeQuote, ChipDistribution, RealtimeSource,
@@ -367,6 +368,9 @@ class AkshareFetcher(BaseFetcher):
 
             if df is not None and not df.empty:
                 logger.info(f"[API返回] ak.stock_zh_a_hist 成功: {len(df)} 行, 耗时 {api_elapsed:.2f}s")
+                # 规范化：东财 A股 成交量单位为手，统一转换为股（见 normalization.py）
+                if '成交量' in df.columns:
+                    df['成交量'] = hands_to_shares(df['成交量'])
                 return df
             else:
                 logger.warning(f"[API返回] ak.stock_zh_a_hist 返回空数据")
@@ -414,9 +418,9 @@ class AkshareFetcher(BaseFetcher):
                 df = df.rename(columns=rename_map)
 
                 # 计算涨跌幅（新浪接口可能不返回）
+                # 规范化：本地计算首行保持 NaN，禁止 fillna(0)（见 normalization.py）
                 if '收盘' in df.columns:
-                    df['涨跌幅'] = df['收盘'].pct_change() * 100
-                    df['涨跌幅'] = df['涨跌幅'].fillna(0)
+                    df['涨跌幅'] = compute_pct_chg(df['收盘'])
 
                 return df
             return pd.DataFrame()
@@ -454,12 +458,17 @@ class AkshareFetcher(BaseFetcher):
                 }
                 df = df.rename(columns=rename_map)
 
+                # 规范化：腾讯财经成交量单位为手（与本文件腾讯实时解析器注释一致），
+                # 统一转换为股（见 normalization.py）
+                if '成交量' in df.columns:
+                    df['成交量'] = hands_to_shares(df['成交量'])
+
                 # 腾讯数据通常包含 '涨跌幅'，如果没有则计算
+                # 规范化：本地计算首行保持 NaN，禁止 fillna(0)
                 if 'pct_chg' in df.columns:
                     df = df.rename(columns={'pct_chg': '涨跌幅'})
                 elif '收盘' in df.columns:
-                    df['涨跌幅'] = df['收盘'].pct_change() * 100
-                    df['涨跌幅'] = df['涨跌幅'].fillna(0)
+                    df['涨跌幅'] = compute_pct_chg(df['收盘'])
 
                 return df
             return pd.DataFrame()
@@ -513,6 +522,10 @@ class AkshareFetcher(BaseFetcher):
                 logger.info(f"[API返回] 列名: {list(df.columns)}")
                 logger.info(f"[API返回] 日期范围: {df['日期'].iloc[0]} ~ {df['日期'].iloc[-1]}")
                 logger.debug(f"[API返回] 最新3条数据:\n{df.tail(3).to_string()}")
+                
+                # 规范化：东财 ETF 成交量单位为手，统一转换为股（见 normalization.py）
+                if '成交量' in df.columns:
+                    df['成交量'] = hands_to_shares(df['成交量'])
             else:
                 logger.warning(f"[API返回] ak.fund_etf_hist_em 返回空数据, 耗时 {api_elapsed:.2f}s")
             
@@ -598,9 +611,9 @@ class AkshareFetcher(BaseFetcher):
                 df = df.rename(columns=rename_map)
                 
                 # 计算涨跌幅（美股接口不直接返回）
+                # 规范化：本地计算首行保持 NaN，禁止 fillna(0)（见 normalization.py）
                 if '收盘' in df.columns:
-                    df['涨跌幅'] = df['收盘'].pct_change() * 100
-                    df['涨跌幅'] = df['涨跌幅'].fillna(0)
+                    df['涨跌幅'] = compute_pct_chg(df['收盘'])
                 
                 # 估算成交额（美股接口不返回）
                 if '成交量' in df.columns and '收盘' in df.columns:
@@ -667,6 +680,7 @@ class AkshareFetcher(BaseFetcher):
             api_elapsed = _time.time() - api_start
             
             # 记录返回数据摘要
+            # 量纲待确认：东财港股成交量原始单位未确证（疑似股），暂不转换（见 normalization.py）
             if df is not None and not df.empty:
                 logger.info(f"[API返回] ak.stock_hk_hist 成功: 返回 {len(df)} 行数据, 耗时 {api_elapsed:.2f}s")
                 logger.info(f"[API返回] 列名: {list(df.columns)}")
