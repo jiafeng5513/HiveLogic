@@ -27,6 +27,7 @@ from src.storage import get_db
 from data_provider import DataFetcherManager
 from data_provider.base import normalize_stock_code
 from data_provider.realtime_types import ChipDistribution
+from src.services.kline_store import StockDailySyncRequest, detect_kline_market, get_kline_store
 from src.analyzer import GeminiAnalyzer, AnalysisResult, fill_chip_structure_if_needed, fill_price_position_if_needed
 from src.data.stock_mapping import STOCK_NAME_MAP
 from src.notification import NotificationService, NotificationChannel
@@ -213,6 +214,31 @@ class StockAnalysisPipeline:
                     f"{stock_name}({code}) {target_date} 数据已存在，跳过获取（断点续传）"
                 )
                 return True, None
+
+            # 权威 K 线优先：kline_data 覆盖完整时直接物化 stock_daily，
+            # 避免网络请求，也避免把无衍生列的裸缓存写回 stock_daily。
+            store = get_kline_store()
+            market = detect_kline_market(code)
+            sync_start = target_date - timedelta(days=45)
+            start_ms = int(datetime.combine(sync_start, datetime.min.time()).timestamp() * 1000)
+            end_ms = int(datetime.combine(target_date, datetime.max.time()).timestamp() * 1000)
+            if store.has_complete_coverage(market, code, "1d", start_ms, end_ms):
+                synced = store.sync_stock_daily(
+                    self.db,
+                    StockDailySyncRequest(
+                        market=market,
+                        symbol=code,
+                        interval="1d",
+                        start_time=start_ms,
+                        end_time=end_ms,
+                        code=code,
+                    ),
+                )
+                if synced > 0:
+                    logger.info(
+                        f"{stock_name}({code}) 已从权威 K 线物化 stock_daily（{synced} 条）"
+                    )
+                    return True, None
 
             # 从数据源获取数据
             logger.info(f"{stock_name}({code}) 开始从数据源获取数据...")

@@ -14,6 +14,7 @@ from src.config import get_config
 from src.core.backtest_engine import OVERALL_SENTINEL_CODE, BacktestEngine, EvaluationConfig
 from src.repositories.backtest_repo import BacktestRepository
 from src.repositories.stock_repo import StockRepository
+from src.services.kline_store import StockDailySyncRequest, detect_kline_market, get_kline_store
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -345,11 +346,31 @@ class BacktestService:
         return None
 
     def _try_fill_daily_data(self, *, code: str, analysis_date: date, eval_window_days: int) -> None:
+        end_date = analysis_date + timedelta(days=max(eval_window_days * 2, 30))
+        start_ms = int(datetime.combine(analysis_date, datetime.min.time()).timestamp() * 1000)
+        end_ms = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
+
+        store = get_kline_store()
+        market = detect_kline_market(code)
+        if store.has_complete_coverage(market, code, "1d", start_ms, end_ms):
+            synced = store.sync_stock_daily(
+                self.db,
+                StockDailySyncRequest(
+                    market=market,
+                    symbol=code,
+                    interval="1d",
+                    start_time=start_ms,
+                    end_time=end_ms,
+                    code=code,
+                ),
+            )
+            if synced > 0:
+                return
+
         try:
             from data_provider.base import DataFetcherManager
 
             # fetch a window that covers start + forward bars
-            end_date = analysis_date + timedelta(days=max(eval_window_days * 2, 30))
             manager = DataFetcherManager()
             df, source = manager.get_daily_data(
                 stock_code=code,
