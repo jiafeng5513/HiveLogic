@@ -337,4 +337,5 @@ DojoAgents 仓库里**没有任何独家数据源**——K线、财报、新闻�
 - [ ] SSE 流式协议设计（dashboard 的 chat API 事件类型与前端 activitySteps 还原）
 - [ ] Harness 护栏体系如何落地到 HiveLogic 的 `/ask` 分析
 - [ ] 多智能体（`multi_agent/pool.py` + delegation 工具）是否适合 HiveLogic 的多策略并行分析
+- [ ] 评估是否引入 CrewAI / AutoGen / MetaGPT / LangGraph 等 Agent 框架重构现有 agent 体系（对照第 124 行结论：借鉴分层设计模式而非整体引入依赖——需论证框架收益是否大于绑定成本）
 - [ ] 撰写 HiveLogic 自己的 AGENTS.md
