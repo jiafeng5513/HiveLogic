@@ -911,15 +911,15 @@ class DataFetcherManager:
     ) -> Optional[pd.DataFrame]:
         """尝试从本地缓存读取K线数据，完全命中时返回 DataFrame，否则返回 None"""
         try:
-            from src.services.kline_cache_manager import get_kline_cache_manager
-            manager = get_kline_cache_manager()
+            from src.services.kline_store import get_kline_store
+            store = get_kline_store()
 
             # 确定市场和时间范围
             market = self._detect_market(stock_code)
             start_ms, end_ms = self._resolve_time_range(start_date, end_date, days)
 
-            # 查询缓存
-            df = manager.query_klines(
+            # 查询权威缓存
+            df = store.query_dataframe(
                 market=market, symbol=stock_code, interval="1d",
                 start_time=start_ms, end_time=end_ms
             )
@@ -927,7 +927,7 @@ class DataFetcherManager:
                 return None
 
             # 检查覆盖度：缓存数据是否覆盖请求的大部分时间段
-            gaps = manager.find_gaps(
+            gaps = store.find_gaps(
                 market=market, symbol=stock_code, interval="1d",
                 start_time=start_ms, end_time=end_ms
             )
@@ -943,10 +943,10 @@ class DataFetcherManager:
     def _cache_write_async(self, stock_code: str, df: pd.DataFrame, source: str) -> None:
         """异步写入缓存（不阻塞主流程）"""
         try:
-            from src.services.kline_cache_manager import get_kline_cache_manager
-            manager = get_kline_cache_manager()
+            from src.services.kline_store import get_kline_store
+            store = get_kline_store()
             market = self._detect_market(stock_code)
-            manager.upsert_klines(market=market, symbol=stock_code, interval="1d", df=df, source=source)
+            store.upsert_dataframe(market=market, symbol=stock_code, interval="1d", df=df, source=source)
         except Exception as e:
             logger.debug(f"[缓存写入] {stock_code} 异常（忽略）: {e}")
 

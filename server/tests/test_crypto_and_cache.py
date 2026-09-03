@@ -420,19 +420,19 @@ class TestCacheIntegration:
         duration_days = (end_ms - start_ms) / (24 * 3600 * 1000)
         assert abs(duration_days - 9) < 1
 
-    @patch("src.services.kline_cache_manager.get_kline_cache_manager")
-    def test_cache_hit_skips_network(self, mock_get_mgr):
+    @patch("src.services.kline_store.get_kline_store")
+    def test_cache_hit_skips_network(self, mock_get_store):
         """测试缓存命中跳过网络请求"""
         from data_provider.base import DataFetcherManager
 
-        # 模拟缓存命中
-        mock_cache = MagicMock()
-        mock_cache.query_klines.return_value = pd.DataFrame({
+        # 模拟权威缓存命中
+        mock_store = MagicMock()
+        mock_store.query_dataframe.return_value = pd.DataFrame({
             "open": [100], "high": [110], "low": [90], "close": [105],
             "volume": [1000], "amount": [100000],
         })
-        mock_cache.find_gaps.return_value = []  # 无缺口
-        mock_get_mgr.return_value = mock_cache
+        mock_store.find_gaps.return_value = []  # 无缺口
+        mock_get_store.return_value = mock_store
 
         mgr = DataFetcherManager()
         mgr._skip_cache = False
