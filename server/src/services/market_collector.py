@@ -311,38 +311,38 @@ class MarketCollector:
             logger.warning("[MarketCollector] %s 无快照可归档", snapshot_market)
             return 0
 
-        from src.services.kline_cache_manager import get_kline_cache_manager
+        from src.services.kline_store import KlineBar, get_kline_store
 
-        manager = get_kline_cache_manager()
+        store = get_kline_store()
         kline_market = self._SNAPSHOT_TO_KLINE_MARKET[snapshot_market]
         today_ms = int(
             datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         ) * 1000
 
-        symbol_groups: Dict[str, List[Dict[str, Any]]] = {}
+        symbol_groups: Dict[str, List[KlineBar]] = {}
         for row in rows:
             price = row.get("price")
             if price is None or price <= 0:
                 continue
             sym = row["symbol"]
             symbol_groups.setdefault(sym, []).append(
-                {
-                    "timestamp": today_ms,
-                    "open": row.get("open") or price,
-                    "high": row.get("high") or price,
-                    "low": row.get("low") or price,
-                    "close": price,
-                    "volume": row.get("volume") or 0,
-                    "amount": row.get("amount") or 0,
-                    "is_complete": True,
-                }
+                KlineBar(
+                    timestamp_ms=today_ms,
+                    open=float(row.get("open") or price),
+                    high=float(row.get("high") or price),
+                    low=float(row.get("low") or price),
+                    close=float(price),
+                    volume=float(row.get("volume") or 0),
+                    amount=float(row.get("amount") or 0),
+                    is_complete=True,
+                )
             )
 
         total = 0
-        for sym, klines in symbol_groups.items():
+        for sym, bars in symbol_groups.items():
             try:
-                total += manager.upsert_klines(
-                    kline_market, sym, "1d", klines, "snapshot_archive"
+                total += store.upsert_bars(
+                    kline_market, sym, "1d", bars, "snapshot_archive"
                 )
             except Exception as e:
                 logger.warning("[MarketCollector] 归档 %s 日线失败: %s", sym, e)

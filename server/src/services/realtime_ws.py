@@ -637,20 +637,31 @@ class RealtimeWSRelay:
             await self._flush_candle(builder, is_complete=True)
 
     async def _flush_candle(self, builder: _CandleBuilder, is_complete: bool):
-        """将单个 candle 写入 kline_cache（通过 db_write_queue 串行化）"""
+        """将单个 candle 写入权威 kline_data（通过 db_write_queue 串行化）"""
         if not builder.has_data:
             return
         kline = builder.to_kline(is_complete=is_complete)
         try:
             from src.services.db_write_queue import enqueue_write
-            from src.services.kline_cache_manager import get_kline_cache_manager
-            manager = get_kline_cache_manager()
+            from src.services.kline_store import KlineBar, get_kline_store
+            store = get_kline_store()
             await enqueue_write(
-                manager.upsert_klines,
+                store.upsert_bars,
                 builder.market,
                 builder.symbol,
                 "1m",
-                [kline],
+                [
+                    KlineBar(
+                        timestamp_ms=int(kline["timestamp"]),
+                        open=float(kline["open"]),
+                        high=float(kline["high"]),
+                        low=float(kline["low"]),
+                        close=float(kline["close"]),
+                        volume=float(kline.get("volume", 0)),
+                        amount=float(kline.get("amount", 0)),
+                        is_complete=bool(kline.get("is_complete", True)),
+                    )
+                ],
                 "realtime_ws",
                 label=f"rt_kline_{builder.symbol}",
             )
