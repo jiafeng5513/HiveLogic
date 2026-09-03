@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from src.services.market_cache import MarketCache
+from src.services.kline_store import KlineBar, get_kline_store
 from src.services.data_source_chain import DataSourceChain, DataSource, AllSourcesFailedError
 
 logger = logging.getLogger(__name__)
@@ -310,37 +311,29 @@ class MarketGateway:
 
         if kline_market and interval:
             try:
-                from src.services.kline_cache_manager import get_kline_cache_manager
-                manager = get_kline_cache_manager()
+                store = get_kline_store()
                 start_ms = start_time * 1000 if start_time > 0 else 0
                 end_ms = end_time * 1000 if end_time > 0 else int(time.time() * 1000)
-                df = manager.query_klines(kline_market, symbol, interval, start_ms, end_ms)
-                if df is not None and not df.empty:
-                    bars = []
-                    for _, row in df.iterrows():
-                        bars.append({
-                            "time": int(row["timestamp"] // 1000),
-                            "open": float(row["open"]),
-                            "high": float(row["high"]),
-                            "low": float(row["low"]),
-                            "close": float(row["close"]),
-                            "volume": float(row.get("volume", 0)),
-                            "turnover": float(row.get("amount", 0)),
-                        })
-                    if bars:
-                        self._cache_metrics["kline_cache_hit"] += 1
-                        return bars[-limit:], False
+                cached_bars = store.query_bars(kline_market, symbol, interval, start_ms, end_ms)
+                if cached_bars:
+                    bars = [
+                        {
+                            "time": bar.time_sec,
+                            "open": bar.open,
+                            "high": bar.high,
+                            "low": bar.low,
+                            "close": bar.close,
+                            "volume": bar.volume,
+                            "turnover": bar.amount,
+                        }
+                        for bar in cached_bars
+                    ]
+                    self._cache_metrics["kline_cache_hit"] += 1
+                    return bars[-limit:], False
             except Exception as e:
-                logger.debug("[MarketGateway] kline_data 缓存查询异常: %s", e)
+                logger.debug("[MarketGateway] KlineStore 缓存查询异常: %s", e)
 
         self._cache_metrics["kline_cache_miss"] += 1
-
-        # 尝试从 MarketCache 获取
-        if start_time > 0 and end_time > 0:
-            cached = self._cache.get_cached_kline(symbol, period, start_time, end_time)
-            if cached:
-                logger.debug(f"[MarketGateway] K 线缓存命中: {symbol}/{period} ({len(cached)} bars)")
-                return cached, False
 
         # 从数据源拉取
         self._cache_metrics["kline_live_fetch"] += 1
@@ -349,8 +342,7 @@ class MarketGateway:
                 symbol, market_type, period, start_time, end_time, limit
             )
             if bars:
-                # 写入缓存
-                self._cache.set_cached_kline(symbol, period, bars)
+                self._persist_live_klines(kline_market, symbol, interval, bars)
                 return bars, False
             return [], True
         except Exception as e:
@@ -358,9 +350,37 @@ class MarketGateway:
                 f"[MarketGateway] 拉取 K 线失败 ({symbol}/{period}): {e}",
                 exc_info=True,
             )
-            # 尝试回退到缓存
-            cached = self._cache.get_cached_kline(symbol, period, start_time, end_time)
-            return cached, len(cached) == 0
+            return [], True
+
+    def _persist_live_klines(
+        self,
+        kline_market: str,
+        symbol: str,
+        interval: str,
+        bars: List[Dict[str, Any]],
+    ) -> None:
+        """把 live fetch 的 K 线写入权威源（CN 已由 DataFetcherManager 持久化，跳过避免覆盖 source）。"""
+        if not kline_market or not bars or kline_market == "cn":
+            return
+        store = get_kline_store()
+        store.upsert_bars(
+            kline_market,
+            symbol,
+            interval,
+            [
+                KlineBar(
+                    timestamp_ms=int(bar["time"]) * 1000,
+                    open=float(bar["open"]),
+                    high=float(bar["high"]),
+                    low=float(bar["low"]),
+                    close=float(bar["close"]),
+                    volume=float(bar.get("volume", 0)),
+                    amount=float(bar.get("turnover", 0)),
+                )
+                for bar in bars
+            ],
+            source="market_gateway_live",
+        )
 
     # ==================== 实时行情 ====================
 
